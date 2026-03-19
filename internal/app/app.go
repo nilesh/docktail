@@ -832,8 +832,8 @@ func (m Model) View() string {
 
 	// Status bar
 	statusBar := ui.StatusBarView(m.width, m.logView.Frozen,
-		m.focus == FocusShell, m.shell.IsOpen(), len(m.logView.SelectedLines),
-		len(m.logView.FilteredLogs), m.logView.CursorLine, m.levelFilter)
+		m.focus == FocusShell, m.shell.IsOpen(), m.focus == FocusSidebar, m.sidebar.HideStopped,
+		len(m.logView.SelectedLines), len(m.logView.FilteredLogs), m.logView.CursorLine, m.levelFilter)
 
 	// Compose right panel
 	rightPanel := logView

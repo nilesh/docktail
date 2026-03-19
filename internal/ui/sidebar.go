@@ -141,12 +141,15 @@ func (m SidebarModel) View() string {
 			visColor = t.Muted
 		}
 
-		statusIcon := "▸"
+		statusIcon := " "
+		statusColor := rowBg
 		switch c.Status {
 		case model.StatusPaused:
 			statusIcon = "⏸"
+			statusColor = t.Border
 		case model.StatusStopped, model.StatusExited:
-			statusIcon = "■"
+			statusIcon = "⏹"
+			statusColor = t.Border
 		}
 
 		// Truncate name to fit
@@ -167,9 +170,12 @@ func (m SidebarModel) View() string {
 
 		style := lipgloss.NewStyle().Width(m.Width - 1).Background(rowBg) // -1 for border
 
-		line := sc(visColor, vis) + sc(rowBg, " ")
-		line += lipgloss.NewStyle().Foreground(lipgloss.Color(c.Color)).Background(rowBg).Bold(true).Render(displayName) + sc(rowBg, " ")
-		line += sc(t.Muted, statusIcon)
+		line := sc(visColor, vis) + sc(statusColor, statusIcon) + sc(rowBg, " ")
+		nameColor := lipgloss.Color(c.Color)
+		if c.Status == model.StatusStopped || c.Status == model.StatusExited {
+			nameColor = t.Muted
+		}
+		line += lipgloss.NewStyle().Foreground(nameColor).Background(rowBg).Bold(true).Render(displayName)
 
 		// Shell indicator
 		if m.ShellContainer != nil && m.ShellContainer.ID == c.ID {
@@ -192,29 +198,6 @@ func (m SidebarModel) View() string {
 		note := fmt.Sprintf("(%d hidden)", hiddenCount)
 		lines = append(lines, lipgloss.NewStyle().Foreground(t.OrangeColor).Background(t.SidebarBg).Width(m.Width).Render(note))
 	}
-
-	// Fill middle space
-	hintLines := 6
-	contentLines := len(lines)
-	filler := m.Height - contentLines - hintLines
-	for i := 0; i < filler; i++ {
-		lines = append(lines, bgStyle.Render(""))
-	}
-
-	// Keyboard hints at bottom
-	hintStyle := lipgloss.NewStyle().Foreground(t.Muted).Background(t.SidebarBg).Width(m.Width)
-	hideLabel := "h hide stopped"
-	if m.HideStopped {
-		hideLabel = "h show stopped"
-	}
-	lines = append(lines,
-		hintStyle.Render("⇥ Tab focus"),
-		hintStyle.Render("⎵ toggle log"),
-		hintStyle.Render("↵ actions"),
-		hintStyle.Render("s shell"),
-		hintStyle.Render("a select all"),
-		hintStyle.Render(hideLabel),
-	)
 
 	// Ensure we fill exactly to Height
 	for len(lines) < m.Height {
