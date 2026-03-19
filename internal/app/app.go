@@ -75,7 +75,8 @@ type Model struct {
 	copied          bool
 	copiedExp       time.Time
 
-	// Mouse interaction state
+	// UI state
+	sidebarHidden  bool
 	resizing       bool
 	lastClickTime  time.Time
 	lastClickLineY int
@@ -418,6 +419,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if key.Matches(msg, m.keys.ToggleSidebar) {
+		m.sidebarHidden = !m.sidebarHidden
+		if m.sidebarHidden && m.focus == FocusSidebar {
+			m.focus = FocusLogs
+		}
+		m.updateDimensions()
+		return m, nil
+	}
+
 	if key.Matches(msg, m.keys.LevelFilter) {
 		m.levelFilter = (m.levelFilter + 1) % len(ui.LevelFilters)
 		m.refilter()
@@ -479,7 +489,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) cycleFocus() {
-	if m.shell.IsOpen() {
+	if m.sidebarHidden {
+		// Only cycle between logs and shell
+		if m.shell.IsOpen() {
+			if m.focus == FocusLogs {
+				m.focus = FocusShell
+			} else {
+				m.focus = FocusLogs
+			}
+		}
+	} else if m.shell.IsOpen() {
 		switch m.focus {
 		case FocusSidebar:
 			m.focus = FocusLogs
@@ -539,6 +558,13 @@ func (m *Model) appendFiltered(entry *model.LogEntry) {
 	m.logView.ClampCursor()
 }
 
+func (m *Model) effectiveSidebarWidth() int {
+	if m.sidebarHidden {
+		return 0
+	}
+	return sidebarWidth
+}
+
 func (m *Model) updateDimensions() {
 	contentHeight := m.height - titleBarHeight - statusBarHeight
 	m.sidebar.Height = contentHeight
@@ -565,7 +591,7 @@ func (m *Model) updateDimensions() {
 	if logHeight < 5 {
 		logHeight = 5
 	}
-	m.logView.Width = m.width - sidebarWidth
+	m.logView.Width = m.width - m.effectiveSidebarWidth()
 	m.logView.Height = logHeight
 
 	m.shell.Focused = m.focus == FocusShell
@@ -657,7 +683,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		contentY := y - titleBarHeight
 
 		// Sidebar click
-		if x < sidebarWidth {
+		if !m.sidebarHidden && x < sidebarWidth {
 			m.focus = FocusSidebar
 			m.sidebar.Focused = true
 			m.shell.Focused = false
@@ -713,7 +739,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		x, y := msg.X, msg.Y
 		contentY := y - titleBarHeight
 
-		if x < sidebarWidth {
+		if !m.sidebarHidden && x < sidebarWidth {
 			if m.sidebar.HandleRightClick(contentY) {
 				m.actionMenu.OpenMenu(m.sidebar.SelectedContainer())
 				m.focus = FocusSidebar
@@ -771,13 +797,18 @@ func (m Model) View() string {
 		m.notification, m.copied, m.search, m.logView.Frozen,
 		m.logView.WrapLines, m.logView.ShowTimestamps, m.levelFilter)
 
+	sw := m.effectiveSidebarWidth()
+
 	// Sidebar
-	if m.actionMenu.Open {
-		m.sidebar.ActionMenu = &m.actionMenu
-	} else {
-		m.sidebar.ActionMenu = nil
+	var sidebarView string
+	if !m.sidebarHidden {
+		if m.actionMenu.Open {
+			m.sidebar.ActionMenu = &m.actionMenu
+		} else {
+			m.sidebar.ActionMenu = nil
+		}
+		sidebarView = m.sidebar.View()
 	}
-	sidebarView := m.sidebar.View()
 
 	// Log view
 	logView := m.logView.View()
@@ -785,7 +816,7 @@ func (m Model) View() string {
 	// Shell (if open)
 	var shellView string
 	if m.shell.IsOpen() {
-		shellView = m.shell.View(m.width - sidebarWidth)
+		shellView = m.shell.View(m.width - sw)
 	}
 
 	// Status bar
@@ -797,7 +828,7 @@ func (m Model) View() string {
 	rightPanel := logView
 	if shellView != "" {
 		resizeHandle := lipgloss.NewStyle().
-			Width(m.width - sidebarWidth).
+			Width(m.width - sw).
 			Background(func() lipgloss.Color {
 				if m.focus == FocusShell {
 					return t.Accent
@@ -809,7 +840,12 @@ func (m Model) View() string {
 	}
 
 	// Main area: sidebar + right panel
-	mainArea := lipgloss.JoinHorizontal(lipgloss.Top, sidebarView, rightPanel)
+	var mainArea string
+	if m.sidebarHidden {
+		mainArea = rightPanel
+	} else {
+		mainArea = lipgloss.JoinHorizontal(lipgloss.Top, sidebarView, rightPanel)
+	}
 
 	// Full layout
 	full := lipgloss.JoinVertical(lipgloss.Left, titleBar, mainArea, statusBar)

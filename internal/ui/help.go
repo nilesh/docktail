@@ -41,6 +41,7 @@ func (m HelpModel) View(width, height int) string {
 			{"l", "Cycle log levels"},
 			{"/", "Search (Tab: regex)"},
 			{"T", "Toggle theme"},
+			{"b", "Toggle sidebar"},
 			{"x", "Close shell"},
 			{"Tab", "Cycle focus"},
 			{"q", "Quit"},
