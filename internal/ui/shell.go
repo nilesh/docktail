@@ -38,7 +38,8 @@ type ShellModel struct {
 	Height    int
 	Focused   bool
 
-	exec ExecSession
+	exec       ExecSession
+	scrollBack int // how many lines scrolled back from bottom (0 = at bottom)
 }
 
 // ShellFocusLogs is sent when the user presses Esc in the shell.
@@ -54,6 +55,7 @@ func NewShellModel() ShellModel {
 func (m *ShellModel) SetExec(s ExecSession) {
 	m.exec = s
 }
+
 
 // ReadExecOutput returns a tea.Cmd that reads from the exec session and sends
 // ShellOutputMsg messages. It should be started once when the exec session is
@@ -75,6 +77,8 @@ func (m *ShellModel) ReadExecOutput() tea.Cmd {
 
 // HandleOutput appends output from the exec session to the shell lines.
 func (m *ShellModel) HandleOutput(output string) {
+	// Snap to bottom on new output
+	m.scrollBack = 0
 	// Detect clear screen sequences and reset the buffer
 	if strings.Contains(output, "\033[2J") || strings.Contains(output, "\033[H\033[2J") {
 		m.Lines = nil
@@ -103,16 +107,68 @@ func (m *ShellModel) HandleOutput(output string) {
 	}
 }
 
+// Handled returns true if the shell consumed the key. When false, the caller
+// should process the key itself (e.g. tab to cycle focus, x to close shell).
+func (m ShellModel) Handled(msg tea.KeyMsg) bool {
+	if msg.String() == "esc" {
+		return true
+	}
+	if m.exec == nil {
+		// Dead session — let the app handle all keys
+		return false
+	}
+	return true
+}
+
 func (m ShellModel) Update(msg tea.KeyMsg) (ShellModel, tea.Cmd) {
 	// Esc always returns focus to logs
 	if msg.String() == "esc" {
 		return m, func() tea.Msg { return ShellFocusLogs{} }
 	}
 
-	// If no exec session, do nothing
+	// Scroll: shift+up / shift+down / pgup / pgdown
+	switch {
+	case msg.Type == tea.KeyPgUp:
+		m.scrollBack += m.Height
+		maxBack := len(m.Lines) - m.Height
+		if maxBack < 0 {
+			maxBack = 0
+		}
+		if m.scrollBack > maxBack {
+			m.scrollBack = maxBack
+		}
+		return m, nil
+	case msg.Type == tea.KeyPgDown:
+		m.scrollBack -= m.Height
+		if m.scrollBack < 0 {
+			m.scrollBack = 0
+		}
+		return m, nil
+	case msg.Alt && msg.Type == tea.KeyUp:
+		m.scrollBack++
+		maxBack := len(m.Lines) - m.Height
+		if maxBack < 0 {
+			maxBack = 0
+		}
+		if m.scrollBack > maxBack {
+			m.scrollBack = maxBack
+		}
+		return m, nil
+	case msg.Alt && msg.Type == tea.KeyDown:
+		m.scrollBack--
+		if m.scrollBack < 0 {
+			m.scrollBack = 0
+		}
+		return m, nil
+	}
+
+	// If no exec session, don't send keystrokes
 	if m.exec == nil {
 		return m, nil
 	}
+
+	// New output arrived — snap back to bottom
+	m.scrollBack = 0
 
 	// Raw/PTY mode: send each keypress as bytes to the exec session
 	var data []byte
@@ -194,28 +250,37 @@ func (m ShellModel) View(width int) string {
 		Background(t.ChromeBg).
 		Render(tabContent + strings.Repeat(" ", pad) + closeBtn)
 
-	// Shell content — show last N lines, truncated to shell width
+	// Shell content — show last N lines (offset by scrollBack), truncated to shell width
 	var shellLines []string
 	visibleLines := m.Height
-	start := 0
-	if len(m.Lines) > visibleLines {
-		start = len(m.Lines) - visibleLines
+	end := len(m.Lines) - m.scrollBack
+	if end < 0 {
+		end = 0
+	}
+	start := end - visibleLines
+	if start < 0 {
+		start = 0
 	}
 	leftPad := 2
 	contentWidth := shellWidth - leftPad
 	shellBg := lipgloss.NewStyle().Width(shellWidth).MaxWidth(shellWidth).Background(t.Background)
 	padStr := strings.Repeat(" ", leftPad)
-	for i := start; i < len(m.Lines); i++ {
+	for i := start; i < end; i++ {
 		// Expand tabs and truncate to content area to prevent overflow
 		line := expandTabs(m.Lines[i], 8)
 		runes := []rune(line)
 		if len(runes) > contentWidth {
 			runes = runes[:contentWidth]
 		}
-		shellLines = append(shellLines, shellBg.Foreground(t.Foreground).Render(padStr+string(runes)))
+		text := padStr + string(runes)
+		// Show cursor on the last line when focused and at bottom
+		if m.Focused && m.exec != nil && m.scrollBack == 0 && i == len(m.Lines)-1 {
+			text += lipgloss.NewStyle().Foreground(t.Accent).Render("\u258c")
+		}
+		shellLines = append(shellLines, shellBg.Foreground(t.Foreground).Render(text))
 	}
 
-	// Cursor indicator when focused
+	// Cursor indicator when focused and no output yet
 	if m.Focused && len(shellLines) == 0 {
 		shellLines = append(shellLines, shellBg.Foreground(t.Accent).Render(padStr+"\u258c"))
 	}

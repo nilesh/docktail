@@ -115,7 +115,7 @@ func (m SidebarModel) View() string {
 	}
 	header := lipgloss.NewStyle().
 		Foreground(headerColor).
-		Background(t.Background).
+		Background(t.SidebarBg).
 		Bold(true).
 		Width(m.Width).
 		Render(headerText)
@@ -125,6 +125,14 @@ func (m SidebarModel) View() string {
 	visible := m.VisibleContainers()
 	for i, c := range visible {
 		focused := m.Focused && m.Cursor == i
+
+		rowBg := t.SidebarBg
+		if focused {
+			rowBg = t.FocusBg
+		}
+		sc := func(fg lipgloss.Color, text string) string {
+			return lipgloss.NewStyle().Foreground(fg).Background(rowBg).Render(text)
+		}
 
 		vis := "●"
 		visColor := t.GreenColor
@@ -152,23 +160,20 @@ func (m SidebarModel) View() string {
 		}
 
 		// Left border indicator for focused item
-		border := " "
+		border := lipgloss.NewStyle().Background(rowBg).Render(" ")
 		if focused {
-			border = lipgloss.NewStyle().Foreground(t.Accent).Render("│")
+			border = lipgloss.NewStyle().Foreground(t.Accent).Background(rowBg).Render("│")
 		}
 
-		style := lipgloss.NewStyle().Width(m.Width - 1).Background(t.Background) // -1 for border
-		if focused {
-			style = style.Background(t.FocusBg)
-		}
+		style := lipgloss.NewStyle().Width(m.Width - 1).Background(rowBg) // -1 for border
 
-		line := lipgloss.NewStyle().Foreground(visColor).Render(vis) + " "
-		line += lipgloss.NewStyle().Foreground(lipgloss.Color(c.Color)).Bold(true).Render(displayName) + " "
-		line += lipgloss.NewStyle().Foreground(t.Muted).Render(statusIcon)
+		line := sc(visColor, vis) + sc(rowBg, " ")
+		line += lipgloss.NewStyle().Foreground(lipgloss.Color(c.Color)).Background(rowBg).Bold(true).Render(displayName) + sc(rowBg, " ")
+		line += sc(t.Muted, statusIcon)
 
 		// Shell indicator
 		if m.ShellContainer != nil && m.ShellContainer.ID == c.ID {
-			line += " " + lipgloss.NewStyle().Foreground(t.Accent).Render(">_")
+			line += sc(rowBg, " ") + sc(t.Accent, ">_")
 		}
 
 		lines = append(lines, border+style.Render(line))
@@ -181,11 +186,11 @@ func (m SidebarModel) View() string {
 	}
 
 	// Hidden containers note
-	bgStyle := lipgloss.NewStyle().Width(m.Width).Background(t.Background)
+	bgStyle := lipgloss.NewStyle().Width(m.Width).Background(t.SidebarBg)
 	hiddenCount := m.HiddenCount()
 	if hiddenCount > 0 {
 		note := fmt.Sprintf("(%d hidden)", hiddenCount)
-		lines = append(lines, lipgloss.NewStyle().Foreground(t.OrangeColor).Background(t.Background).Width(m.Width).Render(note))
+		lines = append(lines, lipgloss.NewStyle().Foreground(t.OrangeColor).Background(t.SidebarBg).Width(m.Width).Render(note))
 	}
 
 	// Fill middle space
@@ -197,7 +202,7 @@ func (m SidebarModel) View() string {
 	}
 
 	// Keyboard hints at bottom
-	hintStyle := lipgloss.NewStyle().Foreground(t.Muted).Background(t.Background).Width(m.Width)
+	hintStyle := lipgloss.NewStyle().Foreground(t.Muted).Background(t.SidebarBg).Width(m.Width)
 	hideLabel := "h hide stopped"
 	if m.HideStopped {
 		hideLabel = "h show stopped"

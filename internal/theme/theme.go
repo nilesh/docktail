@@ -13,7 +13,11 @@ type Theme struct {
 	AccentDim  lipgloss.Color
 
 	// Chrome colors (title bar, status bar, shell tab, etc.)
+	TitleBg   lipgloss.Color // title bar brand background
+	TitleFg   lipgloss.Color // title bar text color
+	TitleDim  lipgloss.Color // title bar muted text
 	ChromeBg  lipgloss.Color
+	SidebarBg lipgloss.Color // sidebar background
 	FocusBg   lipgloss.Color // focused sidebar item bg
 	OverlayBg lipgloss.Color // help overlay backdrop
 
@@ -35,14 +39,18 @@ type Theme struct {
 
 // Dark is the default dark theme.
 var Dark = Theme{
-	Background: lipgloss.Color("#0d1117"),
+	Background: lipgloss.Color("#141921"),
 	Foreground: lipgloss.Color("#c9d1d9"),
 	Muted:      lipgloss.Color("#484f58"),
 	Border:     lipgloss.Color("#30363d"),
 	Accent:     lipgloss.Color("#58a6ff"),
 	AccentDim:  lipgloss.Color("#1f6feb"),
 
-	ChromeBg:  lipgloss.Color("#161b22"),
+	TitleBg:   lipgloss.Color("#3d2e00"),
+	TitleFg:   lipgloss.Color("#f5d67b"),
+	TitleDim:  lipgloss.Color("#9a8548"),
+	ChromeBg:  lipgloss.Color("#1a2028"),
+	SidebarBg: lipgloss.Color("#111820"),
 	FocusBg:   lipgloss.Color("#1f2937"),
 	OverlayBg: lipgloss.Color("#000000"),
 
@@ -69,7 +77,11 @@ var Light = Theme{
 	Accent:     lipgloss.Color("#0969da"),
 	AccentDim:  lipgloss.Color("#218bff"),
 
-	ChromeBg:  lipgloss.Color("#f6f8fa"),
+	TitleBg:   lipgloss.Color("#fef3c7"),
+	TitleFg:   lipgloss.Color("#713f12"),
+	TitleDim:  lipgloss.Color("#a16207"),
+	ChromeBg:  lipgloss.Color("#e8ecf0"),
+	SidebarBg: lipgloss.Color("#f0f3f6"),
 	FocusBg:   lipgloss.Color("#ddf4ff"),
 	OverlayBg: lipgloss.Color("#e0e0e0"),
 
@@ -130,15 +142,15 @@ func NewStyles() Styles {
 	t := Current
 	return Styles{
 		TitleBar: lipgloss.NewStyle().
-			Background(t.ChromeBg).
-			Foreground(t.Foreground).
+			Background(t.TitleBg).
+			Foreground(t.TitleFg).
 			Padding(0, 1),
 		StatusBar: lipgloss.NewStyle().
 			Background(t.ChromeBg).
 			Foreground(t.Muted).
 			Padding(0, 1),
 		Sidebar: lipgloss.NewStyle().
-			Background(t.Background).
+			Background(t.SidebarBg).
 			BorderRight(true).
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderForeground(t.Border),

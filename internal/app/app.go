@@ -293,7 +293,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ExecConnectedMsg:
 		if msg.Err != nil {
-			m.shell.HandleOutput(fmt.Sprintf("\r\nError: %s\r\n", msg.Err))
+			// Connection failed — close the shell panel
+			m.shell.Close()
+			m.sidebar.ShellContainer = nil
+			if m.focus == FocusShell {
+				m.focus = FocusLogs
+			}
+			m.updateDimensions()
+			m.notify(fmt.Sprintf("Shell error: %s", msg.Err))
 			return m, nil
 		}
 		m.shell.SetExec(msg.Session)
@@ -370,11 +377,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	// Shell focused
+	// Shell focused — let the shell handle the key first; if it doesn't
+	// consume it (e.g. exec is dead), fall through to app-level keys.
 	if m.focus == FocusShell {
-		var cmd tea.Cmd
-		m.shell, cmd = m.shell.Update(msg)
-		return m, cmd
+		if m.shell.Handled(msg) {
+			var cmd tea.Cmd
+			m.shell, cmd = m.shell.Update(msg)
+			return m, cmd
+		}
+		// Fall through to global keys (tab, x, etc.)
 	}
 
 	// Search mode

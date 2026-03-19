@@ -15,41 +15,58 @@ type ExecSession struct {
 }
 
 // CreateExec starts an interactive shell session in a container.
-// It tries /bin/bash first, then falls back to /bin/sh.
+// It probes for available shells, preferring bash over sh.
 func (c *Client) CreateExec(ctx context.Context, containerID string) (*ExecSession, error) {
-	shells := []string{"/bin/bash", "/bin/sh"}
+	shell := c.detectShell(ctx, containerID)
 
-	var lastErr error
-	for _, shell := range shells {
-		execConfig := containerTypes.ExecOptions{
-			Cmd:          []string{shell},
-			AttachStdin:  true,
-			AttachStdout: true,
-			AttachStderr: true,
-			Tty:          true,
-		}
-
-		execResp, err := c.cli.ContainerExecCreate(ctx, containerID, execConfig)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		attachResp, err := c.cli.ContainerExecAttach(ctx, execResp.ID, containerTypes.ExecAttachOptions{
-			Tty: true,
-		})
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		return &ExecSession{
-			ExecID: execResp.ID,
-			Conn:   attachResp,
-		}, nil
+	execConfig := containerTypes.ExecOptions{
+		Cmd:          []string{shell},
+		AttachStdin:  true,
+		AttachStdout: true,
+		AttachStderr: true,
+		Tty:          true,
 	}
 
-	return nil, lastErr
+	execResp, err := c.cli.ContainerExecCreate(ctx, containerID, execConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	attachResp, err := c.cli.ContainerExecAttach(ctx, execResp.ID, containerTypes.ExecAttachOptions{
+		Tty: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &ExecSession{
+		ExecID: execResp.ID,
+		Conn:   attachResp,
+	}, nil
+}
+
+// detectShell probes the container for available shells by running a
+// non-interactive exec. Returns /bin/bash if available, otherwise /bin/sh.
+func (c *Client) detectShell(ctx context.Context, containerID string) string {
+	resp, err := c.cli.ContainerExecCreate(ctx, containerID, containerTypes.ExecOptions{
+		Cmd:          []string{"test", "-x", "/bin/bash"},
+		AttachStdout: true,
+		AttachStderr: true,
+	})
+	if err != nil {
+		return "/bin/sh"
+	}
+
+	if err := c.cli.ContainerExecStart(ctx, resp.ID, containerTypes.ExecStartOptions{}); err != nil {
+		return "/bin/sh"
+	}
+
+	inspect, err := c.cli.ContainerExecInspect(ctx, resp.ID)
+	if err != nil || inspect.ExitCode != 0 {
+		return "/bin/sh"
+	}
+
+	return "/bin/bash"
 }
 
 // Write sends input to the exec session.

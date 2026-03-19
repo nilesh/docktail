@@ -11,6 +11,11 @@ import (
 	"github.com/nilesh/docktail/internal/theme"
 )
 
+// stripANSI removes ANSI escape sequences from a string.
+func stripANSI(s string) string {
+	return ansiRegex.ReplaceAllString(s, "")
+}
+
 // LogViewModel manages the main log viewport.
 type LogViewModel struct {
 	Logs           []*model.LogEntry
@@ -56,21 +61,29 @@ func (m LogViewModel) Update(msg tea.KeyMsg, keys LogViewKeyMap) (LogViewModel, 
 	maxIdx := len(m.FilteredLogs) - 1
 
 	switch {
+	case msg.Type == tea.KeyShiftUp:
+		if m.SelAnchor < 0 {
+			m.SelAnchor = m.CursorLine
+		}
+		if m.CursorLine > 0 {
+			m.CursorLine--
+		}
+		m.selectRange(m.SelAnchor, m.CursorLine)
+	case msg.Type == tea.KeyShiftDown:
+		if m.SelAnchor < 0 {
+			m.SelAnchor = m.CursorLine
+		}
+		if m.CursorLine < maxIdx {
+			m.CursorLine++
+		}
+		m.selectRange(m.SelAnchor, m.CursorLine)
 	case key.Matches(msg, keys.Up):
 		if m.CursorLine > 0 {
 			m.CursorLine--
 		}
-		if !msg.Alt {
-			m.SelectedLines = make(map[int]bool)
-			m.SelAnchor = -1
-		}
 	case key.Matches(msg, keys.Down):
 		if m.CursorLine < maxIdx {
 			m.CursorLine++
-		}
-		if !msg.Alt {
-			m.SelectedLines = make(map[int]bool)
-			m.SelAnchor = -1
 		}
 	case key.Matches(msg, keys.Top):
 		m.CursorLine = 0
@@ -105,6 +118,18 @@ func (m LogViewModel) Update(msg tea.KeyMsg, keys LogViewKeyMap) (LogViewModel, 
 	return m, nil
 }
 
+// selectRange replaces the selection with all lines between a and b (inclusive).
+func (m *LogViewModel) selectRange(a, b int) {
+	m.SelectedLines = make(map[int]bool)
+	lo, hi := a, b
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	for i := lo; i <= hi; i++ {
+		m.SelectedLines[i] = true
+	}
+}
+
 func (m LogViewModel) buildCopyText() string {
 	if len(m.SelectedLines) == 0 {
 		return ""
@@ -121,7 +146,7 @@ func (m LogViewModel) buildCopyText() string {
 			parts = append(parts, entry.Timestamp.Format("15:04:05.000"))
 		}
 		parts = append(parts, fmt.Sprintf("[%s]", entry.Container.Name))
-		parts = append(parts, entry.Message)
+		parts = append(parts, stripANSI(entry.Message))
 		lines = append(lines, strings.Join(parts, " "))
 	}
 	return strings.Join(lines, "\n")
@@ -187,20 +212,37 @@ func (m LogViewModel) View() string {
 			border = lipgloss.NewStyle().Foreground(t.AccentDim).Render("│")
 		}
 
+		// Determine background for this line
+		bg := t.Background
+		if isSelected {
+			bg = t.SelectedBg
+		} else if isCursor {
+			bg = t.CursorBg
+		}
+
+		// Helper to style text with the correct background
+		styled := func(fg lipgloss.Color, text string) string {
+			return lipgloss.NewStyle().Foreground(fg).Background(bg).Render(text)
+		}
+		styledBold := func(fg lipgloss.Color, text string) string {
+			return lipgloss.NewStyle().Foreground(fg).Background(bg).Bold(true).Render(text)
+		}
+		gap := lipgloss.NewStyle().Background(bg).Render(" ")
+
 		// Build the line as a plain string, then truncate to width
 		var parts []string
 		usedWidth := 1 // left border
 
 		if m.Frozen {
-			parts = append(parts, lipgloss.NewStyle().Foreground(t.Border).Render(fmt.Sprintf("%4d", i+1)))
-			parts = append(parts, " ")
+			parts = append(parts, styled(t.Border, fmt.Sprintf("%4d", i+1)))
+			parts = append(parts, gap)
 			usedWidth += 5
 		}
 
 		if m.ShowTimestamps {
 			ts := entry.Timestamp.Format("15:04:05.000")
-			parts = append(parts, lipgloss.NewStyle().Foreground(t.Muted).Render(ts))
-			parts = append(parts, " ")
+			parts = append(parts, styled(t.Muted, ts))
+			parts = append(parts, gap)
 			usedWidth += 13
 		}
 
@@ -209,11 +251,8 @@ func (m LogViewModel) View() string {
 		if len(name) > nameW {
 			name = name[:nameW-1] + "…"
 		}
-		parts = append(parts, lipgloss.NewStyle().
-			Foreground(lipgloss.Color(entry.Container.Color)).
-			Bold(true).
-			Render(fmt.Sprintf("%-*s", nameW, name)))
-		parts = append(parts, " ")
+		parts = append(parts, styledBold(lipgloss.Color(entry.Container.Color), fmt.Sprintf("%-*s", nameW, name)))
+		parts = append(parts, gap)
 		usedWidth += nameW + 1
 
 		// Level
@@ -230,8 +269,8 @@ func (m LogViewModel) View() string {
 		if levelStr == "" {
 			levelStr = "     "
 		}
-		parts = append(parts, lipgloss.NewStyle().Foreground(levelColor).Render(fmt.Sprintf("%-5s", levelStr)))
-		parts = append(parts, " ")
+		parts = append(parts, styled(levelColor, fmt.Sprintf("%-5s", levelStr)))
+		parts = append(parts, gap)
 		usedWidth += 6
 
 		// Message — truncate or wrap
@@ -255,10 +294,10 @@ func (m LogViewModel) View() string {
 					msg = msg[:msgWidth]
 				}
 			}
-			parts = append(parts, lipgloss.NewStyle().Foreground(msgColor).Render(msg))
+			parts = append(parts, styled(msgColor, msg))
 		} else {
 			// Wrap message manually with indent on continuation lines
-			indent := strings.Repeat(" ", usedWidth-1) // -1 for border
+			indent := lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", usedWidth-1)) // -1 for border
 			msgRunes := []rune(msg)
 			first := true
 			for len(msgRunes) > 0 {
@@ -269,24 +308,17 @@ func (m LogViewModel) View() string {
 				chunk := string(msgRunes[:chunkLen])
 				msgRunes = msgRunes[chunkLen:]
 				if first {
-					parts = append(parts, lipgloss.NewStyle().Foreground(msgColor).Render(chunk))
+					parts = append(parts, styled(msgColor, chunk))
 					first = false
 				} else {
-					parts = append(parts, "\n"+indent+lipgloss.NewStyle().Foreground(msgColor).Render(chunk))
+					parts = append(parts, "\n"+indent+styled(msgColor, chunk))
 				}
 			}
 		}
 
 		line := strings.Join(parts, "")
 
-		bg := t.Background
-		if isSelected {
-			bg = t.SelectedBg
-		} else if isCursor {
-			bg = t.CursorBg
-		}
-
-		// Render with fixed width and background, always use MaxWidth to prevent extra wrapping
+		// Render with fixed width and background to fill remaining space
 		rendered := border + lipgloss.NewStyle().
 			Width(logWidth - 1).
 			MaxWidth(logWidth - 1).
@@ -396,7 +428,7 @@ func (m *LogViewModel) CopyLine(lineIdx int) string {
 		parts = append(parts, entry.Timestamp.Format("15:04:05.000"))
 	}
 	parts = append(parts, fmt.Sprintf("[%s]", entry.Container.Name))
-	parts = append(parts, entry.Message)
+	parts = append(parts, stripANSI(entry.Message))
 	return strings.Join(parts, " ")
 }
 
