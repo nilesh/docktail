@@ -1,0 +1,21 @@
+services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+
+  api:
+    image: alpine
+    command: sh -c 'i=0; while true; do i=$((i+1)); echo "[INFO] request handled GET /api/users ($((RANDOM % 100))ms)"; if [ $((i % 5)) -eq 0 ]; then echo "[WARN] connection pool low: 2/10 available"; fi; if [ $((i % 12)) -eq 0 ]; then echo "[ERROR] unhandled error in /api/payments: ECONNREFUSED" >&2; fi; sleep 1; done'
+
+  worker:
+    image: alpine
+    command: sh -c 'while true; do echo "[INFO] task.process succeeded in 0.$((RANDOM % 999))s"; sleep 3; echo "[DEBUG] worker heartbeat: 5 active, 12 reserved"; sleep 2; done'
+
+  db:
+    image: alpine
+    command: sh -c 'while true; do echo "[INFO] checkpoint complete: wrote $((RANDOM % 1000)) buffers"; sleep 10; if [ $((RANDOM % 3)) -eq 0 ]; then echo "[WARN] high memory usage: $((60 + RANDOM % 30))%"; fi; done'
+
+  redis:
+    image: alpine
+    command: sh -c 'while true; do echo "[INFO] DB 0: $((10000 + RANDOM % 5000)) keys in 16384 slots HT."; sleep 8; done'
