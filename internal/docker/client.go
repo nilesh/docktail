@@ -172,7 +172,8 @@ func cleanContainerName(names []string) string {
 	}
 	name := names[0]
 	// Docker prepends "/" to container names
-	return strings.TrimPrefix(name, "/")
+	name = strings.TrimPrefix(name, "/")
+	return name
 }
 
 func mapStatus(state string) model.ContainerStatus {
