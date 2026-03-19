@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,6 +11,9 @@ import (
 	"github.com/nilesh/docktail/internal/model"
 	"github.com/nilesh/docktail/internal/theme"
 )
+
+// ansiRegex matches ANSI escape sequences (CSI, OSC, and single-char escapes).
+var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][0-9A-B]|\x1b\[[\?]?[0-9;]*[hlJK]`)
 
 // ExecSession is the interface the shell model uses to communicate with a
 // Docker exec session. This keeps the ui package decoupled from the docker
@@ -71,13 +75,22 @@ func (m *ShellModel) ReadExecOutput() tea.Cmd {
 
 // HandleOutput appends output from the exec session to the shell lines.
 func (m *ShellModel) HandleOutput(output string) {
-	// Split output into lines, handling \r\n and \n
-	raw := strings.ReplaceAll(output, "\r\n", "\n")
-	parts := strings.Split(raw, "\n")
+	// Detect clear screen sequences and reset the buffer
+	if strings.Contains(output, "\033[2J") || strings.Contains(output, "\033[H\033[2J") {
+		m.Lines = nil
+	}
+
+	// Strip ANSI escape sequences
+	clean := ansiRegex.ReplaceAllString(output, "")
+
+	// Handle carriage returns (overwrite current line)
+	clean = strings.ReplaceAll(clean, "\r\n", "\n")
+	clean = strings.ReplaceAll(clean, "\r", "\n")
+
+	parts := strings.Split(clean, "\n")
 
 	for i, part := range parts {
 		if i == 0 && len(m.Lines) > 0 {
-			// Append to the last line
 			m.Lines[len(m.Lines)-1] += part
 		} else {
 			m.Lines = append(m.Lines, part)
@@ -181,27 +194,47 @@ func (m ShellModel) View(width int) string {
 		Background(t.ChromeBg).
 		Render(tabContent + strings.Repeat(" ", pad) + closeBtn)
 
-	// Shell content — show last N lines
+	// Shell content — show last N lines, truncated to shell width
 	var shellLines []string
 	visibleLines := m.Height
 	start := 0
 	if len(m.Lines) > visibleLines {
 		start = len(m.Lines) - visibleLines
 	}
+	leftPad := 2
+	contentWidth := shellWidth - leftPad
+	shellBg := lipgloss.NewStyle().Width(shellWidth).MaxWidth(shellWidth).Background(t.Background)
+	padStr := strings.Repeat(" ", leftPad)
 	for i := start; i < len(m.Lines); i++ {
-		shellLines = append(shellLines, lipgloss.NewStyle().Width(shellWidth).Foreground(t.Foreground).Render(m.Lines[i]))
+		// Expand tabs and truncate to content area to prevent overflow
+		line := expandTabs(m.Lines[i], 8)
+		runes := []rune(line)
+		if len(runes) > contentWidth {
+			runes = runes[:contentWidth]
+		}
+		shellLines = append(shellLines, shellBg.Foreground(t.Foreground).Render(padStr+string(runes)))
 	}
 
 	// Cursor indicator when focused
 	if m.Focused && len(shellLines) == 0 {
-		shellLines = append(shellLines, lipgloss.NewStyle().Width(shellWidth).Foreground(t.Accent).Render("\u258c"))
+		shellLines = append(shellLines, shellBg.Foreground(t.Accent).Render(padStr+"\u258c"))
 	}
 
 	for len(shellLines) < m.Height {
-		shellLines = append(shellLines, lipgloss.NewStyle().Width(shellWidth).Render(""))
+		shellLines = append(shellLines, shellBg.Render(""))
 	}
 
-	content := lipgloss.JoinVertical(lipgloss.Left, shellLines...)
+	// Clip to exact height to prevent overflow
+	joined := lipgloss.JoinVertical(lipgloss.Left, shellLines...)
+	visualRows := strings.Split(joined, "\n")
+	if len(visualRows) > m.Height {
+		visualRows = visualRows[:m.Height]
+	}
+	for len(visualRows) < m.Height {
+		visualRows = append(visualRows, shellBg.Render(""))
+	}
+
+	content := strings.Join(visualRows, "\n")
 	return lipgloss.JoinVertical(lipgloss.Left, tabBar, content)
 }
 
@@ -225,4 +258,23 @@ func (m *ShellModel) Close() {
 // IsOpen returns whether the shell is open.
 func (m ShellModel) IsOpen() bool {
 	return m.Container != nil
+}
+
+// expandTabs replaces tab characters with spaces aligned to tabstop boundaries.
+func expandTabs(s string, tabWidth int) string {
+	var b strings.Builder
+	col := 0
+	for _, r := range s {
+		if r == '\t' {
+			spaces := tabWidth - (col % tabWidth)
+			for j := 0; j < spaces; j++ {
+				b.WriteByte(' ')
+			}
+			col += spaces
+		} else {
+			b.WriteRune(r)
+			col++
+		}
+	}
+	return b.String()
 }

@@ -328,6 +328,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ui.ExecuteActionMsg:
 		m.actionMenu.Close()
+		if msg.Action == "shell" {
+			m.shell.Open(msg.Container)
+			m.sidebar.ShellContainer = msg.Container
+			m.focus = FocusShell
+			m.updateDimensions()
+			return m, m.createExecSession(msg.Container)
+		}
 		return m, m.executeContainerAction(msg.Container, msg.Action)
 
 	case tea.MouseMsg:
@@ -765,6 +772,11 @@ func (m Model) View() string {
 		m.logView.WrapLines, m.logView.ShowTimestamps, m.levelFilter)
 
 	// Sidebar
+	if m.actionMenu.Open {
+		m.sidebar.ActionMenu = &m.actionMenu
+	} else {
+		m.sidebar.ActionMenu = nil
+	}
 	sidebarView := m.sidebar.View()
 
 	// Log view
@@ -802,16 +814,6 @@ func (m Model) View() string {
 	// Full layout
 	full := lipgloss.JoinVertical(lipgloss.Left, titleBar, mainArea, statusBar)
 
-	// Action menu overlay
-	if m.actionMenu.Open {
-		menuView := m.actionMenu.View(m.width)
-		if menuView != "" {
-			menuRow := titleBarHeight + m.sidebar.Cursor
-			menuCol := sidebarWidth + 1
-			full = overlayAt(full, menuView, menuRow, menuCol)
-		}
-	}
-
 	// Help overlay
 	if m.help.Visible {
 		full = m.help.View(m.width, m.height)
@@ -820,26 +822,3 @@ func (m Model) View() string {
 	return full
 }
 
-func overlayAt(base string, overlay string, row, col int) string {
-	baseLines := strings.Split(base, "\n")
-	overlayLines := strings.Split(overlay, "\n")
-	for i, ol := range overlayLines {
-		r := row + i
-		if r < 0 || r >= len(baseLines) {
-			continue
-		}
-		baseLine := baseLines[r]
-		baseRunes := []rune(baseLine)
-		overlayRunes := []rune(ol)
-		for j, or_ := range overlayRunes {
-			c := col + j
-			if c >= 0 && c < len(baseRunes) {
-				baseRunes[c] = or_
-			} else if c >= 0 {
-				baseRunes = append(baseRunes, or_)
-			}
-		}
-		baseLines[r] = string(baseRunes)
-	}
-	return strings.Join(baseLines, "\n")
-}

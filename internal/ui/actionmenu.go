@@ -147,3 +147,33 @@ func (m ActionMenuModel) View(width int) string {
 
 	return boxStyle.Render(content)
 }
+
+// InlineView renders the action menu as lines to embed within the sidebar.
+func (m ActionMenuModel) InlineView(width int, t theme.Theme) []string {
+	if !m.Open || len(m.Actions) == 0 {
+		return nil
+	}
+
+	bgStyle := lipgloss.NewStyle().Background(t.ChromeBg).Width(width)
+
+	var result []string
+	// Top border
+	result = append(result, bgStyle.Foreground(t.Border).Render("├"+strings.Repeat("─", width-2)+"┤"))
+
+	for i, a := range m.Actions {
+		prefix := "  "
+		style := bgStyle.Foreground(t.Foreground)
+		if i == m.Cursor {
+			prefix = "> "
+			style = bgStyle.Foreground(t.Accent).Bold(true)
+		}
+		result = append(result, style.Render(prefix+a.Label))
+	}
+
+	// Hint
+	result = append(result, bgStyle.Foreground(t.Muted).Render("↵ select  esc close"))
+	// Bottom border
+	result = append(result, bgStyle.Foreground(t.Border).Render("├"+strings.Repeat("─", width-2)+"┤"))
+
+	return result
+}

@@ -17,8 +17,9 @@ type SidebarModel struct {
 	Focused        bool
 	Width          int
 	Height         int
-	ShellContainer *model.Container // currently open shell container
-	HideStopped    bool             // hide stopped/exited containers
+	ShellContainer *model.Container  // currently open shell container
+	HideStopped    bool              // hide stopped/exited containers
+	ActionMenu     *ActionMenuModel  // action menu to render inline (set by app)
 }
 
 // SidebarKeyMap holds sidebar-specific key bindings.
@@ -75,7 +76,11 @@ func (m SidebarModel) Update(msg tea.KeyMsg, keys SidebarKeyMap) (SidebarModel, 
 		}
 		return m, func() tea.Msg { return RefilterMsg{} }
 	case key.Matches(msg, keys.Shell):
-		c := m.VisibleContainers()[m.Cursor]
+		vc := m.VisibleContainers()
+		if m.Cursor >= len(vc) {
+			break
+		}
+		c := vc[m.Cursor]
 		if c.Status == model.StatusRunning {
 			return m, func() tea.Msg {
 				return OpenShellMsg{Container: c}
@@ -167,6 +172,12 @@ func (m SidebarModel) View() string {
 		}
 
 		lines = append(lines, border+style.Render(line))
+
+		// Render action menu inline after the focused container
+		if focused && m.ActionMenu != nil && m.ActionMenu.Open {
+			menuLines := m.ActionMenu.InlineView(m.Width, t)
+			lines = append(lines, menuLines...)
+		}
 	}
 
 	// Hidden containers note
