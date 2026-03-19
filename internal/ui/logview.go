@@ -132,6 +132,27 @@ func (m LogViewModel) View() string {
 
 	var lines []string
 
+	// Show helpful empty state when there are no logs
+	if len(m.FilteredLogs) == 0 {
+		emptyMsg := "No logs yet. Waiting for container output..."
+		if len(m.Logs) > 0 {
+			emptyMsg = "No logs match the current filters."
+		}
+		for i := 0; i < m.Height; i++ {
+			if i == m.Height/2 {
+				centered := lipgloss.NewStyle().
+					Width(logWidth).
+					Align(lipgloss.Center).
+					Foreground(t.Muted).
+					Render(emptyMsg)
+				lines = append(lines, centered)
+			} else {
+				lines = append(lines, lipgloss.NewStyle().Width(logWidth).Render(""))
+			}
+		}
+		return lipgloss.JoinVertical(lipgloss.Left, lines...)
+	}
+
 	startIdx := 0
 	if !m.Frozen {
 		startIdx = len(m.FilteredLogs) - m.Height
@@ -231,6 +252,85 @@ func (m *LogViewModel) ClickLine(lineIdx int) {
 		m.SelectedLines = make(map[int]bool)
 		m.SelAnchor = -1
 	}
+}
+
+// ShiftClickLine selects a range from the current cursor (or anchor) to the
+// clicked line index, auto-freezing if necessary.
+func (m *LogViewModel) ShiftClickLine(lineIdx int) {
+	if lineIdx < 0 || lineIdx >= len(m.FilteredLogs) {
+		return
+	}
+	if !m.Frozen {
+		m.Frozen = true
+	}
+
+	anchor := m.SelAnchor
+	if anchor < 0 {
+		anchor = m.CursorLine
+	}
+	if anchor < 0 {
+		anchor = 0
+	}
+
+	// Clear previous selection and select the range.
+	m.SelectedLines = make(map[int]bool)
+	lo, hi := anchor, lineIdx
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	for i := lo; i <= hi; i++ {
+		m.SelectedLines[i] = true
+	}
+	m.CursorLine = lineIdx
+}
+
+// CtrlClickLine toggles the clicked line in the selection without clearing
+// existing selections. Auto-freezes if needed.
+func (m *LogViewModel) CtrlClickLine(lineIdx int) {
+	if lineIdx < 0 || lineIdx >= len(m.FilteredLogs) {
+		return
+	}
+	if !m.Frozen {
+		m.Frozen = true
+	}
+
+	if m.SelectedLines[lineIdx] {
+		delete(m.SelectedLines, lineIdx)
+	} else {
+		m.SelectedLines[lineIdx] = true
+	}
+	m.CursorLine = lineIdx
+	m.SelAnchor = lineIdx
+}
+
+// CopyLine returns the text of a single log line for clipboard copy.
+func (m *LogViewModel) CopyLine(lineIdx int) string {
+	if lineIdx < 0 || lineIdx >= len(m.FilteredLogs) {
+		return ""
+	}
+	entry := m.FilteredLogs[lineIdx]
+	var parts []string
+	if m.ShowTimestamps {
+		parts = append(parts, entry.Timestamp.Format("15:04:05.000"))
+	}
+	parts = append(parts, fmt.Sprintf("[%s]", entry.Container.Name))
+	parts = append(parts, entry.Message)
+	return strings.Join(parts, " ")
+}
+
+// VisibleStartIndex returns the index of the first visible log line in the
+// current viewport, matching the logic in View().
+func (m *LogViewModel) VisibleStartIndex() int {
+	startIdx := 0
+	if !m.Frozen {
+		startIdx = len(m.FilteredLogs) - m.Height
+	} else if m.CursorLine >= 0 {
+		startIdx = m.CursorLine - m.Height/2
+	}
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	return startIdx
 }
 
 // ScrollUp scrolls the view up by n lines.

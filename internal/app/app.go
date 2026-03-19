@@ -2,10 +2,13 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -42,6 +45,11 @@ type Options struct {
 	Since      string
 }
 
+// containerStream tracks a per-container log stream.
+type containerStream struct {
+	cancel context.CancelFunc
+}
+
 // Model is the root Bubbletea model for the application.
 type Model struct {
 	opts   Options
@@ -67,19 +75,31 @@ type Model struct {
 	copied          bool
 	copiedExp       time.Time
 
+	// Mouse interaction state
+	resizing       bool
+	lastClickTime  time.Time
+	lastClickLineY int
+
 	// Docker client
-	client *docker.Client
-	logCh  chan docker.LogMessage
-	cancel context.CancelFunc
+	client     *docker.Client
+	logCh      chan docker.LogMessage
+	baseCtx    context.Context
+	baseCancel context.CancelFunc
+	streams    map[string]*containerStream
 }
 
 // New creates a new application model.
 func New(opts Options) Model {
+	ctx, cancel := context.WithCancel(context.Background())
 	m := Model{
-		opts:   opts,
-		keys:   DefaultKeyMap(),
-		focus:  FocusLogs,
-		client: opts.Client,
+		opts:       opts,
+		keys:       DefaultKeyMap(),
+		focus:      FocusLogs,
+		client:     opts.Client,
+		baseCtx:    ctx,
+		baseCancel: cancel,
+		streams:    make(map[string]*containerStream),
+		logCh:      make(chan docker.LogMessage, 256),
 		sidebar: ui.SidebarModel{
 			Containers: opts.Containers,
 			Width:      sidebarWidth,
@@ -105,6 +125,12 @@ type LogMsg struct {
 // TickMsg triggers periodic UI updates.
 type TickMsg time.Time
 
+// ExecConnectedMsg is sent when an exec session is established (or fails).
+type ExecConnectedMsg struct {
+	Session ui.ExecSession
+	Err     error
+}
+
 // NotifClearMsg clears a notification.
 type NotifClearMsg struct{}
 
@@ -112,6 +138,8 @@ type NotifClearMsg struct{}
 type ContainerActionMsg struct {
 	ContainerID string
 	Action      string
+	RawAction   string
+	Container   *model.Container
 	Err         error
 }
 
@@ -129,26 +157,57 @@ func tickCmd() tea.Cmd {
 }
 
 func (m *Model) startLogStreams() tea.Cmd {
-	if m.cancel != nil {
-		m.cancel()
+	for id, s := range m.streams {
+		s.cancel()
+		delete(m.streams, id)
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancel = cancel
-	m.logCh = make(chan docker.LogMessage, 256)
 
 	for _, c := range m.sidebar.Containers {
 		if c.Status == model.StatusRunning {
-			ch := m.client.StreamLogs(ctx, c, m.opts.Since)
-			go func(ch <-chan docker.LogMessage) {
-				for msg := range ch {
-					m.logCh <- msg
-				}
-			}(ch)
+			m.startStreamForContainer(c)
 		}
 	}
 
 	return m.waitForLog()
+}
+
+func (m *Model) startStreamForContainer(c *model.Container) {
+	if s, ok := m.streams[c.ID]; ok {
+		s.cancel()
+		delete(m.streams, c.ID)
+	}
+
+	ctx, cancel := context.WithCancel(m.baseCtx)
+	m.streams[c.ID] = &containerStream{cancel: cancel}
+
+	ch := m.client.StreamLogs(ctx, c, m.opts.Since)
+	go func(ch <-chan docker.LogMessage) {
+		for msg := range ch {
+			m.logCh <- msg
+		}
+	}(ch)
+}
+
+func (m *Model) stopStreamForContainer(containerID string) {
+	if s, ok := m.streams[containerID]; ok {
+		s.cancel()
+		delete(m.streams, containerID)
+	}
+}
+
+func (m *Model) handleStreamLifecycle(msg ContainerActionMsg) tea.Cmd {
+	switch msg.RawAction {
+	case "start", "restart", "unpause":
+		m.stopStreamForContainer(msg.ContainerID)
+		m.startStreamForContainer(msg.Container)
+		m.notify(fmt.Sprintf("%s succeeded", msg.Action))
+	case "stop":
+		m.stopStreamForContainer(msg.ContainerID)
+		m.notify(fmt.Sprintf("%s succeeded", msg.Action))
+	case "pause":
+		m.notify(fmt.Sprintf("%s succeeded", msg.Action))
+	}
+	return nil
 }
 
 func (m *Model) waitForLog() tea.Cmd {
@@ -182,20 +241,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd()
 
 	case LogMsg:
-		if msg.Err == nil && msg.Entry != nil {
+		if msg.Err != nil {
+			m.notify(fmt.Sprintf("Log stream error: %v", msg.Err))
+		} else if msg.Entry != nil {
 			m.logView.Logs = append(m.logView.Logs, msg.Entry)
 			if len(m.logView.Logs) > maxLogBuffer {
 				m.logView.Logs = m.logView.Logs[len(m.logView.Logs)-maxLogBuffer:]
+				m.refilter()
+			} else {
+				m.appendFiltered(msg.Entry)
 			}
-			m.refilter()
 		}
 		return m, m.waitForLog()
 
 	case ContainerActionMsg:
 		if msg.Err != nil {
-			m.notify(fmt.Sprintf("Error: %s %s failed", msg.Action, msg.ContainerID))
+			m.notify(fmt.Sprintf("Error: %s failed", msg.Action))
+			return m, nil
 		}
-		return m, nil
+		return m, m.handleStreamLifecycle(msg)
 
 	case ui.RefilterMsg:
 		m.refilter()
@@ -205,19 +269,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.shell.Open(msg.Container)
 		m.focus = FocusShell
 		m.updateDimensions()
-		return m, nil
+		return m, m.createExecSession(msg.Container)
 
 	case ui.OpenActionMenuMsg:
 		m.actionMenu.OpenMenu(m.sidebar.SelectedContainer())
 		return m, nil
+
+	case ExecConnectedMsg:
+		if msg.Err != nil {
+			m.shell.HandleOutput(fmt.Sprintf("\r\nError: %s\r\n", msg.Err))
+			return m, nil
+		}
+		m.shell.SetExec(msg.Session)
+		m.shell.Lines = nil
+		return m, m.shell.ReadExecOutput()
+
+	case ui.ShellOutputMsg:
+		if msg.Err != nil {
+			return m, nil
+		}
+		m.shell.HandleOutput(msg.Output)
+		return m, m.shell.ReadExecOutput()
 
 	case ui.ShellFocusLogs:
 		m.focus = FocusLogs
 		return m, nil
 
 	case ui.CopiedMsg:
-		// Phase 3 will wire clipboard here
-		_ = msg.Text
+		if err := clipboard.WriteAll(msg.Text); err != nil {
+			encoded := base64.StdEncoding.EncodeToString([]byte(msg.Text))
+			fmt.Fprintf(os.Stdout, "\033]52;c;%s\007", encoded)
+		}
 		m.copied = true
 		m.copiedExp = time.Now().Add(1500 * time.Millisecond)
 		return m, nil
@@ -239,8 +321,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Quit always works (except in search/shell)
 	if key.Matches(msg, m.keys.Quit) && !m.search.Active && m.focus != FocusShell {
-		if m.cancel != nil {
-			m.cancel()
+		if m.baseCancel != nil {
+			m.baseCancel()
 		}
 		return m, tea.Quit
 	}
@@ -402,10 +484,39 @@ func (m *Model) refilter() {
 	m.logView.ClampCursor()
 }
 
+func (m *Model) appendFiltered(entry *model.LogEntry) {
+	lf := ui.LevelFilters[m.levelFilter]
+	if !entry.Container.Visible {
+		return
+	}
+	if lf != "" && entry.Level != lf {
+		return
+	}
+	if !m.search.Matches(entry.Message) {
+		return
+	}
+	m.logView.FilteredLogs = append(m.logView.FilteredLogs, entry)
+	m.logView.ClampCursor()
+}
+
 func (m *Model) updateDimensions() {
 	contentHeight := m.height - titleBarHeight - statusBarHeight
 	m.sidebar.Height = contentHeight
 	m.sidebar.Focused = m.focus == FocusSidebar
+
+	// Clamp shell height to valid bounds on resize
+	if m.shell.IsOpen() {
+		maxShellHeight := contentHeight - 5 - 1 - shellTabHeight
+		if maxShellHeight < 3 {
+			maxShellHeight = 3
+		}
+		if m.shell.Height > maxShellHeight {
+			m.shell.Height = maxShellHeight
+		}
+		if m.shell.Height < 3 {
+			m.shell.Height = 3
+		}
+	}
 
 	logHeight := contentHeight
 	if m.shell.IsOpen() {
@@ -418,6 +529,16 @@ func (m *Model) updateDimensions() {
 	m.logView.Height = logHeight
 
 	m.shell.Focused = m.focus == FocusShell
+}
+
+func (m *Model) createExecSession(c *model.Container) tea.Cmd {
+	return func() tea.Msg {
+		session, err := m.client.CreateExec(context.Background(), c.ID)
+		if err != nil {
+			return ExecConnectedMsg{Err: err}
+		}
+		return ExecConnectedMsg{Session: session}
+	}
 }
 
 func (m *Model) executeContainerAction(c *model.Container, action string) tea.Cmd {
@@ -457,12 +578,31 @@ func (m *Model) executeContainerAction(c *model.Container, action string) tea.Cm
 		return ContainerActionMsg{
 			ContainerID: c.ID,
 			Action:      label + " " + c.Name,
+			RawAction:   action,
+			Container:   c,
 			Err:         err,
 		}
 	}
 }
 
+const doubleClickThreshold = 300 * time.Millisecond
+
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Shell resize drag handling
+	if m.shell.IsOpen() {
+		resizeHandleY := titleBarHeight + m.logView.Height
+		switch {
+		case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress && msg.Y == resizeHandleY:
+			m.resizing = true
+			return m, nil
+		case msg.Action == tea.MouseActionMotion && m.resizing:
+			return m.handleResizeDrag(msg), nil
+		case msg.Action == tea.MouseActionRelease && m.resizing:
+			m.resizing = false
+			return m, nil
+		}
+	}
+
 	switch msg.Button {
 	case tea.MouseButtonLeft:
 		if msg.Action != tea.MouseActionRelease {
@@ -502,7 +642,28 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.focus = FocusLogs
 		m.sidebar.Focused = false
 		m.shell.Focused = false
-		m.logView.ClickLine(contentY)
+
+		logLineIdx := m.logView.VisibleStartIndex() + contentY
+
+		switch {
+		case msg.Shift:
+			m.logView.ShiftClickLine(logLineIdx)
+		case msg.Ctrl:
+			m.logView.CtrlClickLine(logLineIdx)
+		default:
+			// Double-click detection
+			now := time.Now()
+			if now.Sub(m.lastClickTime) <= doubleClickThreshold && m.lastClickLineY == y {
+				text := m.logView.CopyLine(logLineIdx)
+				if text != "" {
+					m.lastClickTime = time.Time{}
+					return m, func() tea.Msg { return ui.CopiedMsg{Text: text} }
+				}
+			}
+			m.lastClickTime = now
+			m.lastClickLineY = y
+			m.logView.ClickLine(logLineIdx)
+		}
 		return m, nil
 
 	case tea.MouseButtonRight:
@@ -529,9 +690,31 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseButtonWheelDown:
 		m.logView.ScrollDown(3)
 		return m, nil
+
+	case tea.MouseButtonNone:
+		if msg.Action == tea.MouseActionMotion && m.resizing {
+			return m.handleResizeDrag(msg), nil
+		}
+		return m, nil
 	}
 
 	return m, nil
+}
+
+func (m Model) handleResizeDrag(msg tea.MouseMsg) Model {
+	contentHeight := m.height - titleBarHeight - statusBarHeight
+	newShellHeight := (m.height - statusBarHeight) - msg.Y - 1 - shellTabHeight
+	const minShellHeight = 3
+	maxShellHeight := contentHeight - 5 - 1 - shellTabHeight
+	if newShellHeight < minShellHeight {
+		newShellHeight = minShellHeight
+	}
+	if newShellHeight > maxShellHeight {
+		newShellHeight = maxShellHeight
+	}
+	m.shell.Height = newShellHeight
+	m.updateDimensions()
+	return m
 }
 
 // View renders the entire TUI.
@@ -585,10 +768,44 @@ func (m Model) View() string {
 	// Full layout
 	full := lipgloss.JoinVertical(lipgloss.Left, titleBar, mainArea, statusBar)
 
+	// Action menu overlay
+	if m.actionMenu.Open {
+		menuView := m.actionMenu.View(m.width)
+		if menuView != "" {
+			menuRow := titleBarHeight + m.sidebar.Cursor
+			menuCol := sidebarWidth + 1
+			full = overlayAt(full, menuView, menuRow, menuCol)
+		}
+	}
+
 	// Help overlay
 	if m.help.Visible {
 		full = m.help.View(m.width, m.height)
 	}
 
 	return full
+}
+
+func overlayAt(base string, overlay string, row, col int) string {
+	baseLines := strings.Split(base, "\n")
+	overlayLines := strings.Split(overlay, "\n")
+	for i, ol := range overlayLines {
+		r := row + i
+		if r < 0 || r >= len(baseLines) {
+			continue
+		}
+		baseLine := baseLines[r]
+		baseRunes := []rune(baseLine)
+		overlayRunes := []rune(ol)
+		for j, or_ := range overlayRunes {
+			c := col + j
+			if c >= 0 && c < len(baseRunes) {
+				baseRunes[c] = or_
+			} else if c >= 0 {
+				baseRunes = append(baseRunes, or_)
+			}
+		}
+		baseLines[r] = string(baseRunes)
+	}
+	return strings.Join(baseLines, "\n")
 }

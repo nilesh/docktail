@@ -1,10 +1,13 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/nilesh/docktail/internal/model"
+	"github.com/nilesh/docktail/internal/theme"
 )
 
 // ContainerAction represents an available action for a container.
@@ -89,19 +92,58 @@ func (m ActionMenuModel) Update(msg tea.KeyMsg, container *model.Container) (Act
 	return m, nil
 }
 
-// View renders the action menu (simple text for now; overlay rendering is Phase 6).
+// View renders the action menu as a bordered overlay box.
 func (m ActionMenuModel) View(width int) string {
 	if !m.Open || len(m.Actions) == 0 {
 		return ""
 	}
 
+	t := theme.Current
+
+	// Find the widest action label for sizing
+	maxLabelWidth := 0
+	for _, a := range m.Actions {
+		if len(a.Label) > maxLabelWidth {
+			maxLabelWidth = len(a.Label)
+		}
+	}
+
+	// Item width: "> " prefix (2) + label + padding
+	itemWidth := maxLabelWidth + 4
+
+	normalStyle := lipgloss.NewStyle().
+		Foreground(t.Foreground).
+		Width(itemWidth)
+
+	cursorStyle := lipgloss.NewStyle().
+		Foreground(t.Background).
+		Background(t.Accent).
+		Bold(true).
+		Width(itemWidth)
+
 	var lines []string
 	for i, a := range m.Actions {
-		prefix := "  "
+		label := fmt.Sprintf("  %s", a.Label)
 		if i == m.Cursor {
-			prefix = "> "
+			label = fmt.Sprintf("> %s", a.Label)
+			lines = append(lines, cursorStyle.Render(label))
+		} else {
+			lines = append(lines, normalStyle.Render(label))
 		}
-		lines = append(lines, prefix+a.Label)
 	}
-	return strings.Join(lines, "\n")
+
+	hint := lipgloss.NewStyle().
+		Foreground(t.Muted).
+		Italic(true).
+		Render("Enter:select Esc:close")
+
+	content := strings.Join(lines, "\n") + "\n" + hint
+
+	boxStyle := lipgloss.NewStyle().
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(t.Accent).
+		Background(t.Background).
+		Padding(0, 1)
+
+	return boxStyle.Render(content)
 }

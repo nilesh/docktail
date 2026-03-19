@@ -67,3 +67,11 @@ func (s *ExecSession) Close() error {
 	s.Conn.Close()
 	return nil
 }
+
+// ResizeExec resizes the TTY for an exec session.
+func (c *Client) ResizeExec(execID string, height, width uint) error {
+	return c.cli.ContainerExecResize(c.ctx, execID, containerTypes.ResizeOptions{
+		Height: height,
+		Width:  width,
+	})
+}
