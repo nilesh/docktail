@@ -13,7 +13,8 @@ type KeyMap struct {
 	LevelFilter key.Binding
 	Search    key.Binding
 	CloseShell key.Binding
-	CycleFocus key.Binding
+	CycleFocus  key.Binding
+	ToggleTheme key.Binding
 
 	// Sidebar
 	SidebarUp     key.Binding
@@ -50,7 +51,8 @@ func DefaultKeyMap() KeyMap {
 		LevelFilter: key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "cycle log level")),
 		Search:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
 		CloseShell: key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "close shell")),
-		CycleFocus: key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "cycle focus")),
+		CycleFocus:  key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "cycle focus")),
+		ToggleTheme: key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "toggle theme")),
 
 		SidebarUp:     key.NewBinding(key.WithKeys("up", "k")),
 		SidebarDown:   key.NewBinding(key.WithKeys("down", "j")),

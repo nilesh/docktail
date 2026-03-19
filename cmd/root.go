@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/nilesh/docktail/internal/app"
 	"github.com/nilesh/docktail/internal/docker"
+	"github.com/nilesh/docktail/internal/theme"
 	"github.com/nilesh/docktail/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -20,6 +21,7 @@ var (
 	timestamps bool
 	wrap       bool
 	noColor    bool
+	themeFlag  string
 )
 
 var rootCmd = &cobra.Command{
@@ -36,6 +38,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&timestamps, "timestamps", "t", true, "Show timestamps")
 	rootCmd.Flags().BoolVarP(&wrap, "wrap", "w", false, "Wrap long lines")
 	rootCmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colors")
+	rootCmd.Flags().StringVar(&themeFlag, "theme", "auto", "Color theme: dark, light, auto (default: auto)")
 	rootCmd.Version = version
 }
 
@@ -49,6 +52,8 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to connect to Docker: %w", err)
 	}
 	defer client.Close()
+
+	theme.SetTheme(themeFlag)
 
 	projectName := project
 	if projectName == "" {

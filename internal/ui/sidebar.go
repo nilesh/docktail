@@ -111,11 +111,21 @@ func (m SidebarModel) View() string {
 
 		style := lipgloss.NewStyle().Width(m.Width)
 		if focused {
-			style = style.Background(lipgloss.Color("#1f2937"))
+			style = style.Background(t.FocusBg)
+		}
+
+		// Truncate name to fit: width - vis(1) - space(1) - space(1) - icon(1) - padding(2)
+		maxNameLen := m.Width - 6
+		if maxNameLen < 4 {
+			maxNameLen = 4
+		}
+		displayName := c.Name
+		if len(displayName) > maxNameLen {
+			displayName = displayName[:maxNameLen-1] + "…"
 		}
 
 		line := lipgloss.NewStyle().Foreground(visColor).Render(vis) + " "
-		line += lipgloss.NewStyle().Foreground(lipgloss.Color(c.Color)).Bold(true).Render(c.Name) + " "
+		line += lipgloss.NewStyle().Foreground(lipgloss.Color(c.Color)).Bold(true).Render(displayName) + " "
 		line += lipgloss.NewStyle().Foreground(t.Muted).Render(statusIcon)
 
 		lines = append(lines, style.Render(line))

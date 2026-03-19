@@ -51,7 +51,7 @@ func StatusBarView(width int, frozen bool, shellFocused bool, selectedCount int,
 			if frozen {
 				return t.FrozenBg
 			}
-			return lipgloss.Color("#161b22")
+			return t.ChromeBg
 		}()).
 		Render(left + strings.Repeat(" ", padding) + right)
 }

@@ -178,7 +178,7 @@ func (m ShellModel) View(width int) string {
 	}
 	tabBar := lipgloss.NewStyle().
 		Width(shellWidth).
-		Background(lipgloss.Color("#161b22")).
+		Background(t.ChromeBg).
 		Render(tabContent + strings.Repeat(" ", pad) + closeBtn)
 
 	// Shell content — show last N lines

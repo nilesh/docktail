@@ -40,6 +40,7 @@ func (m HelpModel) View(width, height int) string {
 			{"w", "Toggle wrap"},
 			{"l", "Cycle log levels"},
 			{"/", "Search (Tab: regex)"},
+			{"T", "Toggle theme"},
 			{"x", "Close shell"},
 			{"Tab", "Cycle focus"},
 			{"q", "Quit"},
@@ -83,7 +84,7 @@ func (m HelpModel) View(width, height int) string {
 	content += lipgloss.NewStyle().Foreground(t.Muted).Render("Press ? or Esc to close")
 
 	box := lipgloss.NewStyle().
-		Background(lipgloss.Color("#161b22")).
+		Background(t.ChromeBg).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(t.Border).
 		Padding(1, 2).
@@ -91,5 +92,5 @@ func (m HelpModel) View(width, height int) string {
 		Render(content)
 
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
-		lipgloss.WithWhitespaceBackground(lipgloss.Color("#000000")))
+		lipgloss.WithWhitespaceBackground(t.OverlayBg))
 }

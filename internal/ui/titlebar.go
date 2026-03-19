@@ -52,6 +52,6 @@ func TitleBarView(width int, project string, visibleCount, totalCount int, notif
 
 	return lipgloss.NewStyle().
 		Width(width).
-		Background(lipgloss.Color("#161b22")).
+		Background(t.ChromeBg).
 		Render(left + strings.Repeat(" ", padding) + right)
 }

@@ -20,7 +20,7 @@ import (
 
 const (
 	maxLogBuffer    = 5000
-	sidebarWidth    = 22
+	sidebarWidth    = 28
 	statusBarHeight = 1
 	titleBarHeight  = 1
 	shellTabHeight  = 1
@@ -377,6 +377,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if key.Matches(msg, m.keys.Wrap) {
 		m.logView.WrapLines = !m.logView.WrapLines
+		return m, nil
+	}
+
+	if key.Matches(msg, m.keys.ToggleTheme) {
+		if theme.Current == theme.Dark {
+			theme.Current = theme.Light
+		} else {
+			theme.Current = theme.Dark
+		}
 		return m, nil
 	}
 
