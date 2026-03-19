@@ -23,6 +23,7 @@ type KeyMap struct {
 	SidebarAction key.Binding
 	SidebarAll    key.Binding
 	SidebarShell  key.Binding
+	SidebarHide   key.Binding
 
 	// Log navigation (frozen)
 	Up       key.Binding
@@ -60,6 +61,7 @@ func DefaultKeyMap() KeyMap {
 		SidebarAction: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "actions")),
 		SidebarAll:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "select all")),
 		SidebarShell:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "open shell")),
+		SidebarHide:   key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "hide stopped")),
 
 		Up:       key.NewBinding(key.WithKeys("up", "k")),
 		Down:     key.NewBinding(key.WithKeys("down", "j")),

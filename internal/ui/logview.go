@@ -23,6 +23,7 @@ type LogViewModel struct {
 	WrapLines      bool
 	Width          int
 	Height         int
+	NameWidth      int // max container name width, set by app
 }
 
 // LogViewKeyMap holds log view key bindings.
@@ -144,10 +145,11 @@ func (m LogViewModel) View() string {
 					Width(logWidth).
 					Align(lipgloss.Center).
 					Foreground(t.Muted).
+					Background(t.Background).
 					Render(emptyMsg)
 				lines = append(lines, centered)
 			} else {
-				lines = append(lines, lipgloss.NewStyle().Width(logWidth).Render(""))
+				lines = append(lines, lipgloss.NewStyle().Width(logWidth).Background(t.Background).Render(""))
 			}
 		}
 		return lipgloss.JoinVertical(lipgloss.Left, lines...)
@@ -167,6 +169,11 @@ func (m LogViewModel) View() string {
 		endIdx = len(m.FilteredLogs)
 	}
 
+	nameW := m.NameWidth
+	if nameW < 8 {
+		nameW = 8
+	}
+
 	for i := startIdx; i < endIdx; i++ {
 		entry := m.FilteredLogs[i]
 		isCursor := m.Frozen && m.CursorLine == i
@@ -180,24 +187,36 @@ func (m LogViewModel) View() string {
 			border = lipgloss.NewStyle().Foreground(t.AccentDim).Render("│")
 		}
 
-		var line string
+		// Build the line as a plain string, then truncate to width
+		var parts []string
+		usedWidth := 1 // left border
 
 		if m.Frozen {
-			lineNum := lipgloss.NewStyle().Foreground(t.Border).Width(4).Align(lipgloss.Right).Render(fmt.Sprintf("%d", i+1))
-			line += lineNum + " "
+			parts = append(parts, lipgloss.NewStyle().Foreground(t.Border).Render(fmt.Sprintf("%4d", i+1)))
+			parts = append(parts, " ")
+			usedWidth += 5
 		}
 
 		if m.ShowTimestamps {
 			ts := entry.Timestamp.Format("15:04:05.000")
-			line += lipgloss.NewStyle().Foreground(t.Muted).Render(ts) + " "
+			parts = append(parts, lipgloss.NewStyle().Foreground(t.Muted).Render(ts))
+			parts = append(parts, " ")
+			usedWidth += 13
 		}
 
-		line += lipgloss.NewStyle().
+		// Container name — pad or truncate to fixed width
+		name := entry.Container.Name
+		if len(name) > nameW {
+			name = name[:nameW-1] + "…"
+		}
+		parts = append(parts, lipgloss.NewStyle().
 			Foreground(lipgloss.Color(entry.Container.Color)).
 			Bold(true).
-			Width(10).
-			Render(entry.Container.Name) + " "
+			Render(fmt.Sprintf("%-*s", nameW, name)))
+		parts = append(parts, " ")
+		usedWidth += nameW + 1
 
+		// Level
 		levelColor := t.InfoColor
 		switch entry.Level {
 		case model.LevelError:
@@ -211,31 +230,87 @@ func (m LogViewModel) View() string {
 		if levelStr == "" {
 			levelStr = "     "
 		}
-		line += lipgloss.NewStyle().Foreground(levelColor).Width(5).Render(levelStr) + " "
+		parts = append(parts, lipgloss.NewStyle().Foreground(levelColor).Render(fmt.Sprintf("%-5s", levelStr)))
+		parts = append(parts, " ")
+		usedWidth += 6
 
+		// Message — truncate or wrap
 		msgColor := t.Foreground
 		if entry.Level == model.LevelError {
 			msgColor = t.ErrorColor
 		} else if entry.Level == model.LevelWarn {
 			msgColor = t.WarnColor
 		}
-		line += lipgloss.NewStyle().Foreground(msgColor).Render(entry.Message)
-
-		style := lipgloss.NewStyle().Width(logWidth - 1) // -1 for left border
-		if isSelected {
-			style = style.Background(t.SelectedBg)
-		} else if isCursor {
-			style = style.Background(t.CursorBg)
+		msg := entry.Message
+		msgWidth := logWidth - usedWidth
+		if msgWidth < 1 {
+			msgWidth = 1
 		}
 
-		lines = append(lines, border+style.Render(line))
+		if !m.WrapLines {
+			if len(msg) > msgWidth {
+				if msgWidth > 3 {
+					msg = msg[:msgWidth-3] + "..."
+				} else {
+					msg = msg[:msgWidth]
+				}
+			}
+			parts = append(parts, lipgloss.NewStyle().Foreground(msgColor).Render(msg))
+		} else {
+			// Wrap message manually with indent on continuation lines
+			indent := strings.Repeat(" ", usedWidth-1) // -1 for border
+			msgRunes := []rune(msg)
+			first := true
+			for len(msgRunes) > 0 {
+				chunkLen := msgWidth
+				if chunkLen > len(msgRunes) {
+					chunkLen = len(msgRunes)
+				}
+				chunk := string(msgRunes[:chunkLen])
+				msgRunes = msgRunes[chunkLen:]
+				if first {
+					parts = append(parts, lipgloss.NewStyle().Foreground(msgColor).Render(chunk))
+					first = false
+				} else {
+					parts = append(parts, "\n"+indent+lipgloss.NewStyle().Foreground(msgColor).Render(chunk))
+				}
+			}
+		}
+
+		line := strings.Join(parts, "")
+
+		bg := t.Background
+		if isSelected {
+			bg = t.SelectedBg
+		} else if isCursor {
+			bg = t.CursorBg
+		}
+
+		// Render with fixed width and background, always use MaxWidth to prevent extra wrapping
+		rendered := border + lipgloss.NewStyle().
+			Width(logWidth - 1).
+			MaxWidth(logWidth - 1).
+			Background(bg).
+			Render(line)
+
+		lines = append(lines, rendered)
 	}
 
-	for len(lines) < m.Height {
-		lines = append(lines, lipgloss.NewStyle().Width(logWidth).Render(""))
+	// Join all rendered lines, then split by actual visual rows
+	// (wrapped lines produce multiple \n-separated rows)
+	joined := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	visualRows := strings.Split(joined, "\n")
+
+	// Clip to exactly m.Height visual rows so wrapping doesn't overflow the panel
+	bgFill := lipgloss.NewStyle().Width(logWidth).Background(t.Background)
+	if len(visualRows) > m.Height {
+		visualRows = visualRows[:m.Height]
+	}
+	for len(visualRows) < m.Height {
+		visualRows = append(visualRows, bgFill.Render(""))
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return strings.Join(visualRows, "\n")
 }
 
 // Freeze toggles freeze state and adjusts cursor.

@@ -91,6 +91,19 @@ type Model struct {
 // New creates a new application model.
 func New(opts Options) Model {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// Compute max container name width for log alignment
+	nameWidth := 10
+	for _, c := range opts.Containers {
+		if len(c.Name) > nameWidth {
+			nameWidth = len(c.Name)
+		}
+	}
+	// Cap at reasonable max
+	if nameWidth > 24 {
+		nameWidth = 24
+	}
+
 	m := Model{
 		opts:       opts,
 		keys:       DefaultKeyMap(),
@@ -110,6 +123,7 @@ func New(opts Options) Model {
 			SelAnchor:      -1,
 			ShowTimestamps: opts.Timestamps,
 			WrapLines:      opts.Wrap,
+			NameWidth:      nameWidth,
 		},
 		shell: ui.NewShellModel(),
 	}
@@ -287,6 +301,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ui.ShellOutputMsg:
 		if msg.Err != nil {
+			// EOF or read error — exec session ended, close the shell
+			m.shell.Close()
+			m.sidebar.ShellContainer = nil
+			if m.focus == FocusShell {
+				m.focus = FocusLogs
+			}
+			m.updateDimensions()
 			return m, nil
 		}
 		m.shell.HandleOutput(msg.Output)
@@ -416,12 +437,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Sidebar keys
 	if m.focus == FocusSidebar {
 		sidebarKeys := ui.SidebarKeyMap{
-			Up:     m.keys.SidebarUp,
-			Down:   m.keys.SidebarDown,
-			Toggle: m.keys.SidebarToggle,
-			Action: m.keys.SidebarAction,
-			All:    m.keys.SidebarAll,
-			Shell:  m.keys.SidebarShell,
+			Up:          m.keys.SidebarUp,
+			Down:        m.keys.SidebarDown,
+			Toggle:      m.keys.SidebarToggle,
+			Action:      m.keys.SidebarAction,
+			All:         m.keys.SidebarAll,
+			Shell:       m.keys.SidebarShell,
+			HideStopped: m.keys.SidebarHide,
 		}
 		var cmd tea.Cmd
 		m.sidebar, cmd = m.sidebar.Update(msg, sidebarKeys)

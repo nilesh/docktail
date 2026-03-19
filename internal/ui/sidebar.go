@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -16,16 +18,18 @@ type SidebarModel struct {
 	Width          int
 	Height         int
 	ShellContainer *model.Container // currently open shell container
+	HideStopped    bool             // hide stopped/exited containers
 }
 
 // SidebarKeyMap holds sidebar-specific key bindings.
 type SidebarKeyMap struct {
-	Up     key.Binding
-	Down   key.Binding
-	Toggle key.Binding
-	Action key.Binding
-	All    key.Binding
-	Shell  key.Binding
+	Up          key.Binding
+	Down        key.Binding
+	Toggle      key.Binding
+	Action      key.Binding
+	All         key.Binding
+	Shell       key.Binding
+	HideStopped key.Binding
 }
 
 // OpenShellMsg requests opening a shell for a container.
@@ -40,19 +44,22 @@ type OpenActionMenuMsg struct{}
 type RefilterMsg struct{}
 
 func (m SidebarModel) Update(msg tea.KeyMsg, keys SidebarKeyMap) (SidebarModel, tea.Cmd) {
+	visible := m.VisibleContainers()
 	switch {
 	case key.Matches(msg, keys.Up):
 		if m.Cursor > 0 {
 			m.Cursor--
 		}
 	case key.Matches(msg, keys.Down):
-		if m.Cursor < len(m.Containers)-1 {
+		if m.Cursor < len(visible)-1 {
 			m.Cursor++
 		}
 	case key.Matches(msg, keys.Toggle):
-		c := m.Containers[m.Cursor]
-		c.Visible = !c.Visible
-		return m, func() tea.Msg { return RefilterMsg{} }
+		if m.Cursor < len(visible) {
+			c := visible[m.Cursor]
+			c.Visible = !c.Visible
+			return m, func() tea.Msg { return RefilterMsg{} }
+		}
 	case key.Matches(msg, keys.Action):
 		return m, func() tea.Msg { return OpenActionMenuMsg{} }
 	case key.Matches(msg, keys.All):
@@ -68,11 +75,21 @@ func (m SidebarModel) Update(msg tea.KeyMsg, keys SidebarKeyMap) (SidebarModel, 
 		}
 		return m, func() tea.Msg { return RefilterMsg{} }
 	case key.Matches(msg, keys.Shell):
-		c := m.Containers[m.Cursor]
+		c := m.VisibleContainers()[m.Cursor]
 		if c.Status == model.StatusRunning {
 			return m, func() tea.Msg {
 				return OpenShellMsg{Container: c}
 			}
+		}
+	case key.Matches(msg, keys.HideStopped):
+		m.HideStopped = !m.HideStopped
+		// Clamp cursor
+		visible := m.VisibleContainers()
+		if m.Cursor >= len(visible) {
+			m.Cursor = len(visible) - 1
+		}
+		if m.Cursor < 0 {
+			m.Cursor = 0
 		}
 	}
 	return m, nil
@@ -93,13 +110,15 @@ func (m SidebarModel) View() string {
 	}
 	header := lipgloss.NewStyle().
 		Foreground(headerColor).
+		Background(t.Background).
 		Bold(true).
 		Width(m.Width).
 		Render(headerText)
 	lines = append(lines, header)
 
 	// Container list
-	for i, c := range m.Containers {
+	visible := m.VisibleContainers()
+	for i, c := range visible {
 		focused := m.Focused && m.Cursor == i
 
 		vis := "●"
@@ -133,7 +152,7 @@ func (m SidebarModel) View() string {
 			border = lipgloss.NewStyle().Foreground(t.Accent).Render("│")
 		}
 
-		style := lipgloss.NewStyle().Width(m.Width - 1) // -1 for border
+		style := lipgloss.NewStyle().Width(m.Width - 1).Background(t.Background) // -1 for border
 		if focused {
 			style = style.Background(t.FocusBg)
 		}
@@ -150,27 +169,40 @@ func (m SidebarModel) View() string {
 		lines = append(lines, border+style.Render(line))
 	}
 
+	// Hidden containers note
+	bgStyle := lipgloss.NewStyle().Width(m.Width).Background(t.Background)
+	hiddenCount := m.HiddenCount()
+	if hiddenCount > 0 {
+		note := fmt.Sprintf("(%d hidden)", hiddenCount)
+		lines = append(lines, lipgloss.NewStyle().Foreground(t.OrangeColor).Background(t.Background).Width(m.Width).Render(note))
+	}
+
 	// Fill middle space
-	hintLines := 5
-	contentLines := 1 + len(m.Containers) // header + containers
+	hintLines := 6
+	contentLines := len(lines)
 	filler := m.Height - contentLines - hintLines
 	for i := 0; i < filler; i++ {
-		lines = append(lines, lipgloss.NewStyle().Width(m.Width).Render(""))
+		lines = append(lines, bgStyle.Render(""))
 	}
 
 	// Keyboard hints at bottom
-	hintStyle := lipgloss.NewStyle().Foreground(t.Muted).Width(m.Width)
+	hintStyle := lipgloss.NewStyle().Foreground(t.Muted).Background(t.Background).Width(m.Width)
+	hideLabel := "h hide stopped"
+	if m.HideStopped {
+		hideLabel = "h show stopped"
+	}
 	lines = append(lines,
 		hintStyle.Render("⇥ Tab focus"),
 		hintStyle.Render("⎵ toggle log"),
 		hintStyle.Render("↵ actions"),
 		hintStyle.Render("s shell"),
 		hintStyle.Render("a select all"),
+		hintStyle.Render(hideLabel),
 	)
 
 	// Ensure we fill exactly to Height
 	for len(lines) < m.Height {
-		lines = append(lines, lipgloss.NewStyle().Width(m.Width).Render(""))
+		lines = append(lines, bgStyle.Render(""))
 	}
 	if len(lines) > m.Height {
 		lines = lines[:m.Height]
@@ -200,10 +232,39 @@ func (m *SidebarModel) HandleRightClick(contentY int) bool {
 
 // SelectedContainer returns the container at the current cursor position.
 func (m SidebarModel) SelectedContainer() *model.Container {
-	if m.Cursor >= 0 && m.Cursor < len(m.Containers) {
-		return m.Containers[m.Cursor]
+	visible := m.VisibleContainers()
+	if m.Cursor >= 0 && m.Cursor < len(visible) {
+		return visible[m.Cursor]
 	}
 	return nil
+}
+
+// VisibleContainers returns containers filtered by HideStopped.
+func (m SidebarModel) VisibleContainers() []*model.Container {
+	if !m.HideStopped {
+		return m.Containers
+	}
+	var result []*model.Container
+	for _, c := range m.Containers {
+		if c.Status != model.StatusStopped && c.Status != model.StatusExited {
+			result = append(result, c)
+		}
+	}
+	return result
+}
+
+// HiddenCount returns the number of hidden stopped containers.
+func (m SidebarModel) HiddenCount() int {
+	if !m.HideStopped {
+		return 0
+	}
+	count := 0
+	for _, c := range m.Containers {
+		if c.Status == model.StatusStopped || c.Status == model.StatusExited {
+			count++
+		}
+	}
+	return count
 }
 
 // VisibleCount returns how many containers have logs visible.
