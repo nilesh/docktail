@@ -7,6 +7,8 @@ A terminal UI for monitoring Docker container logs in real-time.
 
 Docktail gives you a single-pane view of all container logs in your Docker Compose project, with search, filtering, navigation, clipboard support, and an integrated shell — all from your terminal.
 
+![Docktail Screenshot](docs/docktail-screen.png)
+
 ## Features
 
 **Log Streaming**
