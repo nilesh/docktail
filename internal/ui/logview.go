@@ -13,16 +13,16 @@ import (
 
 // LogViewModel manages the main log viewport.
 type LogViewModel struct {
-	Logs          []*model.LogEntry
-	FilteredLogs  []*model.LogEntry
-	Frozen        bool
-	CursorLine    int
-	SelectedLines map[int]bool
-	SelAnchor     int
+	Logs           []*model.LogEntry
+	FilteredLogs   []*model.LogEntry
+	Frozen         bool
+	CursorLine     int
+	SelectedLines  map[int]bool
+	SelAnchor      int
 	ShowTimestamps bool
-	WrapLines     bool
-	Width         int
-	Height        int
+	WrapLines      bool
+	Width          int
+	Height         int
 }
 
 // LogViewKeyMap holds log view key bindings.
@@ -172,6 +172,14 @@ func (m LogViewModel) View() string {
 		isCursor := m.Frozen && m.CursorLine == i
 		isSelected := m.SelectedLines[i]
 
+		// Left border indicator
+		border := " "
+		if isCursor {
+			border = lipgloss.NewStyle().Foreground(t.Accent).Render("│")
+		} else if isSelected {
+			border = lipgloss.NewStyle().Foreground(t.AccentDim).Render("│")
+		}
+
 		var line string
 
 		if m.Frozen {
@@ -213,14 +221,14 @@ func (m LogViewModel) View() string {
 		}
 		line += lipgloss.NewStyle().Foreground(msgColor).Render(entry.Message)
 
-		style := lipgloss.NewStyle().Width(logWidth)
+		style := lipgloss.NewStyle().Width(logWidth - 1) // -1 for left border
 		if isSelected {
 			style = style.Background(t.SelectedBg)
 		} else if isCursor {
 			style = style.Background(t.CursorBg)
 		}
 
-		lines = append(lines, style.Render(line))
+		lines = append(lines, border+style.Render(line))
 	}
 
 	for len(lines) < m.Height {
@@ -272,7 +280,6 @@ func (m *LogViewModel) ShiftClickLine(lineIdx int) {
 		anchor = 0
 	}
 
-	// Clear previous selection and select the range.
 	m.SelectedLines = make(map[int]bool)
 	lo, hi := anchor, lineIdx
 	if lo > hi {

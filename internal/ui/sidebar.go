@@ -10,11 +10,12 @@ import (
 
 // SidebarModel manages the container list sidebar.
 type SidebarModel struct {
-	Containers []*model.Container
-	Cursor     int
-	Focused    bool
-	Width      int
-	Height     int
+	Containers     []*model.Container
+	Cursor         int
+	Focused        bool
+	Width          int
+	Height         int
+	ShellContainer *model.Container // currently open shell container
 }
 
 // SidebarKeyMap holds sidebar-specific key bindings.
@@ -79,21 +80,28 @@ func (m SidebarModel) Update(msg tea.KeyMsg, keys SidebarKeyMap) (SidebarModel, 
 
 func (m SidebarModel) View() string {
 	t := theme.Current
-	lines := make([]string, 0, len(m.Containers)+3)
+	lines := make([]string, 0, len(m.Containers)+10)
 
+	// Header
 	headerColor := t.Muted
 	if m.Focused {
 		headerColor = t.Accent
+	}
+	headerText := "Containers"
+	if m.Focused {
+		headerText += " ▸"
 	}
 	header := lipgloss.NewStyle().
 		Foreground(headerColor).
 		Bold(true).
 		Width(m.Width).
-		Render("CONTAINERS")
+		Render(headerText)
 	lines = append(lines, header)
 
+	// Container list
 	for i, c := range m.Containers {
 		focused := m.Focused && m.Cursor == i
+
 		vis := "●"
 		visColor := t.GreenColor
 		if !c.Visible {
@@ -109,13 +117,8 @@ func (m SidebarModel) View() string {
 			statusIcon = "■"
 		}
 
-		style := lipgloss.NewStyle().Width(m.Width)
-		if focused {
-			style = style.Background(t.FocusBg)
-		}
-
-		// Truncate name to fit: width - vis(1) - space(1) - space(1) - icon(1) - padding(2)
-		maxNameLen := m.Width - 6
+		// Truncate name to fit
+		maxNameLen := m.Width - 8
 		if maxNameLen < 4 {
 			maxNameLen = 4
 		}
@@ -124,15 +127,53 @@ func (m SidebarModel) View() string {
 			displayName = displayName[:maxNameLen-1] + "…"
 		}
 
+		// Left border indicator for focused item
+		border := " "
+		if focused {
+			border = lipgloss.NewStyle().Foreground(t.Accent).Render("│")
+		}
+
+		style := lipgloss.NewStyle().Width(m.Width - 1) // -1 for border
+		if focused {
+			style = style.Background(t.FocusBg)
+		}
+
 		line := lipgloss.NewStyle().Foreground(visColor).Render(vis) + " "
 		line += lipgloss.NewStyle().Foreground(lipgloss.Color(c.Color)).Bold(true).Render(displayName) + " "
 		line += lipgloss.NewStyle().Foreground(t.Muted).Render(statusIcon)
 
-		lines = append(lines, style.Render(line))
+		// Shell indicator
+		if m.ShellContainer != nil && m.ShellContainer.ID == c.ID {
+			line += " " + lipgloss.NewStyle().Foreground(t.Accent).Render(">_")
+		}
+
+		lines = append(lines, border+style.Render(line))
 	}
 
+	// Fill middle space
+	hintLines := 5
+	contentLines := 1 + len(m.Containers) // header + containers
+	filler := m.Height - contentLines - hintLines
+	for i := 0; i < filler; i++ {
+		lines = append(lines, lipgloss.NewStyle().Width(m.Width).Render(""))
+	}
+
+	// Keyboard hints at bottom
+	hintStyle := lipgloss.NewStyle().Foreground(t.Muted).Width(m.Width)
+	lines = append(lines,
+		hintStyle.Render("⇥ Tab focus"),
+		hintStyle.Render("⎵ toggle log"),
+		hintStyle.Render("↵ actions"),
+		hintStyle.Render("s shell"),
+		hintStyle.Render("a select all"),
+	)
+
+	// Ensure we fill exactly to Height
 	for len(lines) < m.Height {
 		lines = append(lines, lipgloss.NewStyle().Width(m.Width).Render(""))
+	}
+	if len(lines) > m.Height {
+		lines = lines[:m.Height]
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)

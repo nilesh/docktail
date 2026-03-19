@@ -9,7 +9,7 @@ import (
 )
 
 // TitleBarView renders the title bar.
-func TitleBarView(width int, project string, visibleCount, totalCount int, notification string, copied bool, search SearchModel, frozen bool) string {
+func TitleBarView(width int, project string, visibleCount, totalCount int, notification string, copied bool, search SearchModel, frozen bool, wrapLines bool, showTimestamps bool, filterLevel int) string {
 	t := theme.Current
 	left := lipgloss.NewStyle().Foreground(t.Accent).Bold(true).Render("◉ docktail")
 	left += lipgloss.NewStyle().Foreground(t.Muted).Render(" │ ")
@@ -41,9 +41,21 @@ func TitleBarView(width int, project string, visibleCount, totalCount int, notif
 		}
 		right += lipgloss.NewStyle().Foreground(t.Muted).Render(label+": "+search.Query) + " "
 	}
+	// Filter level badge
+	if filterLevel > 0 {
+		levelName := strings.ToUpper(string(LevelFilters[filterLevel]))
+		right += lipgloss.NewStyle().Foreground(t.OrangeColor).Render(levelName) + " "
+	}
 	if frozen {
 		right += lipgloss.NewStyle().Foreground(t.OrangeColor).Render("❄ FROZEN") + " "
 	}
+	if wrapLines {
+		right += lipgloss.NewStyle().Foreground(t.Muted).Render("wrap:on") + " "
+	}
+	if showTimestamps {
+		right += lipgloss.NewStyle().Foreground(t.Muted).Render("ts:on") + " "
+	}
+	right += lipgloss.NewStyle().Foreground(t.Muted).Render("? help")
 
 	padding := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if padding < 0 {

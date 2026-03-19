@@ -267,6 +267,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ui.OpenShellMsg:
 		m.shell.Open(msg.Container)
+		m.sidebar.ShellContainer = msg.Container
 		m.focus = FocusShell
 		m.updateDimensions()
 		return m, m.createExecSession(msg.Container)
@@ -398,6 +399,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key.Matches(msg, m.keys.CloseShell) {
 		if m.shell.IsOpen() {
 			m.shell.Close()
+			m.sidebar.ShellContainer = nil
 			if m.focus == FocusShell {
 				m.focus = FocusLogs
 			}
@@ -737,7 +739,8 @@ func (m Model) View() string {
 	// Title bar
 	titleBar := ui.TitleBarView(m.width, m.opts.Project,
 		m.sidebar.VisibleCount(), len(m.sidebar.Containers),
-		m.notification, m.copied, m.search, m.logView.Frozen)
+		m.notification, m.copied, m.search, m.logView.Frozen,
+		m.logView.WrapLines, m.logView.ShowTimestamps, m.levelFilter)
 
 	// Sidebar
 	sidebarView := m.sidebar.View()
@@ -753,7 +756,7 @@ func (m Model) View() string {
 
 	// Status bar
 	statusBar := ui.StatusBarView(m.width, m.logView.Frozen,
-		m.focus == FocusShell, len(m.logView.SelectedLines),
+		m.focus == FocusShell, m.shell.IsOpen(), len(m.logView.SelectedLines),
 		len(m.logView.FilteredLogs), m.logView.CursorLine, m.levelFilter)
 
 	// Compose right panel

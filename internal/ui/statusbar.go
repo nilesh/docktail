@@ -13,7 +13,7 @@ import (
 var LevelFilters = []model.LogLevel{"", model.LevelError, model.LevelWarn, model.LevelInfo, model.LevelDebug}
 
 // StatusBarView renders the status bar.
-func StatusBarView(width int, frozen bool, shellFocused bool, selectedCount int, totalLines int, cursorLine int, levelFilter int) string {
+func StatusBarView(width int, frozen bool, shellFocused bool, shellOpen bool, selectedCount int, totalLines int, cursorLine int, levelFilter int) string {
 	t := theme.Current
 
 	var left string
@@ -22,9 +22,13 @@ func StatusBarView(width int, frozen bool, shellFocused bool, selectedCount int,
 	left += lipgloss.NewStyle().Foreground(t.Accent).Render("w") + lipgloss.NewStyle().Foreground(t.Muted).Render(" wrap ")
 	left += lipgloss.NewStyle().Foreground(t.Accent).Render("l") + lipgloss.NewStyle().Foreground(t.Muted).Render(fmt.Sprintf(" %s ", LevelFilterLabel(levelFilter)))
 	left += lipgloss.NewStyle().Foreground(t.Accent).Render("/") + lipgloss.NewStyle().Foreground(t.Muted).Render(" search ")
+	if shellOpen {
+		left += lipgloss.NewStyle().Foreground(t.Accent).Render("x") + lipgloss.NewStyle().Foreground(t.Muted).Render(" close shell ")
+	}
 	if frozen {
 		left += lipgloss.NewStyle().Foreground(t.Muted).Render("│ ")
 		left += lipgloss.NewStyle().Foreground(t.Accent).Render("⎵") + lipgloss.NewStyle().Foreground(t.Muted).Render(" select ")
+		left += lipgloss.NewStyle().Foreground(t.Accent).Render("⇧↑↓") + lipgloss.NewStyle().Foreground(t.Muted).Render(" range ")
 		left += lipgloss.NewStyle().Foreground(t.Accent).Render("y") + lipgloss.NewStyle().Foreground(t.Muted).Render(" copy ")
 	}
 
