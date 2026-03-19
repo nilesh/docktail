@@ -21,21 +21,45 @@ type Client struct {
 }
 
 // NewClient creates a new Docker client connected to the local daemon.
+// It tries the default socket first, then falls back to known Docker Desktop paths.
 func NewClient() (*Client, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		return nil, fmt.Errorf("docker client: %w", err)
-	}
-
 	ctx := context.Background()
 
-	// Verify connection
-	_, err = cli.Ping(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("cannot connect to Docker daemon: %w", err)
+	// Try default (DOCKER_HOST env or /var/run/docker.sock)
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err == nil {
+		if _, pingErr := cli.Ping(ctx); pingErr == nil {
+			return &Client{cli: cli, ctx: ctx}, nil
+		}
+		cli.Close()
 	}
 
-	return &Client{cli: cli, ctx: ctx}, nil
+	// Try well-known Docker Desktop socket paths
+	home, _ := os.UserHomeDir()
+	fallbackSockets := []string{
+		home + "/.docker/run/docker.sock",       // Docker Desktop (macOS/Linux)
+		home + "/.colima/default/docker.sock",    // Colima
+		home + "/.orbstack/run/docker.sock",      // OrbStack
+	}
+
+	for _, sock := range fallbackSockets {
+		if _, statErr := os.Stat(sock); statErr != nil {
+			continue
+		}
+		cli, err = client.NewClientWithOpts(
+			client.WithHost("unix://"+sock),
+			client.WithAPIVersionNegotiation(),
+		)
+		if err != nil {
+			continue
+		}
+		if _, pingErr := cli.Ping(ctx); pingErr == nil {
+			return &Client{cli: cli, ctx: ctx}, nil
+		}
+		cli.Close()
+	}
+
+	return nil, fmt.Errorf("cannot connect to Docker daemon: %w", err)
 }
 
 // Close closes the Docker client.
@@ -121,6 +145,25 @@ func (c *Client) UnpauseContainer(id string) error {
 // InspectContainer returns the current state of a container.
 func (c *Client) InspectContainer(id string) (types.ContainerJSON, error) {
 	return c.cli.ContainerInspect(c.ctx, id)
+}
+
+// ListProjects returns all Docker Compose project names with running containers.
+func (c *Client) ListProjects() ([]string, error) {
+	containers, err := c.cli.ContainerList(c.ctx, containerTypes.ListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("list containers: %w", err)
+	}
+
+	seen := make(map[string]bool)
+	var projects []string
+	for _, ct := range containers {
+		p := ct.Labels["com.docker.compose.project"]
+		if p != "" && !seen[p] {
+			seen[p] = true
+			projects = append(projects, p)
+		}
+	}
+	return projects, nil
 }
 
 func cleanContainerName(names []string) string {

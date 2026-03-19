@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/nilesh/docktail/internal/app"
 	"github.com/nilesh/docktail/internal/docker"
+	"github.com/nilesh/docktail/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -51,9 +52,14 @@ func run(cmd *cobra.Command, args []string) error {
 
 	projectName := project
 	if projectName == "" {
+		// Try auto-detect from compose file in current directory
 		projectName, err = docker.DetectProject()
 		if err != nil {
-			return fmt.Errorf("could not detect Docker Compose project: %w\nUse --project to specify one", err)
+			// No compose file found — show project picker
+			projectName, err = pickProject(client)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -87,4 +93,33 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func pickProject(client *docker.Client) (string, error) {
+	projects, err := client.ListProjects()
+	if err != nil {
+		return "", fmt.Errorf("failed to list projects: %w", err)
+	}
+
+	if len(projects) == 0 {
+		return "", fmt.Errorf("no Docker Compose projects found.\nStart a project with 'docker compose up' or use --project to specify one")
+	}
+
+	if len(projects) == 1 {
+		return projects[0], nil
+	}
+
+	picker := ui.NewPickerModel("Select a Docker Compose project:", projects)
+	p := tea.NewProgram(picker)
+	result, err := p.Run()
+	if err != nil {
+		return "", fmt.Errorf("picker error: %w", err)
+	}
+
+	m := result.(ui.PickerModel)
+	if m.Quit || m.Selected == "" {
+		return "", fmt.Errorf("no project selected")
+	}
+
+	return m.Selected, nil
 }
