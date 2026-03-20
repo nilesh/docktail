@@ -143,7 +143,7 @@ func (m LogViewModel) buildCopyText() string {
 		entry := m.FilteredLogs[i]
 		var parts []string
 		if m.ShowTimestamps {
-			parts = append(parts, entry.Timestamp.Format("15:04:05.000"))
+			parts = append(parts, entry.Timestamp.Local().Format("15:04:05.000"))
 		}
 		parts = append(parts, fmt.Sprintf("[%s]", entry.Container.Name))
 		parts = append(parts, stripANSI(entry.Message))
@@ -240,7 +240,7 @@ func (m LogViewModel) View() string {
 		}
 
 		if m.ShowTimestamps {
-			ts := entry.Timestamp.Format("15:04:05.000")
+			ts := entry.Timestamp.Local().Format("15:04:05.000")
 			parts = append(parts, styled(t.Muted, ts))
 			parts = append(parts, gap)
 			usedWidth += 13
@@ -425,7 +425,7 @@ func (m *LogViewModel) CopyLine(lineIdx int) string {
 	entry := m.FilteredLogs[lineIdx]
 	var parts []string
 	if m.ShowTimestamps {
-		parts = append(parts, entry.Timestamp.Format("15:04:05.000"))
+		parts = append(parts, entry.Timestamp.Local().Format("15:04:05.000"))
 	}
 	parts = append(parts, fmt.Sprintf("[%s]", entry.Container.Name))
 	parts = append(parts, stripANSI(entry.Message))
