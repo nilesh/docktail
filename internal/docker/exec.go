@@ -14,9 +14,9 @@ type ExecSession struct {
 	Conn   types.HijackedResponse
 }
 
-// CreateExec starts an interactive shell session in a container.
+// createExec starts an interactive shell session in a container.
 // It probes for available shells, preferring bash over sh.
-func (c *Client) CreateExec(ctx context.Context, containerID string) (*ExecSession, error) {
+func (c *Client) createExec(ctx context.Context, containerID string) (*ExecSession, error) {
 	shell := c.detectShell(ctx, containerID)
 
 	execConfig := containerTypes.ExecOptions{

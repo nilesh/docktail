@@ -6,7 +6,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/nilesh/docktail/internal/app"
+	"github.com/nilesh/docktail/internal/backend"
 	"github.com/nilesh/docktail/internal/docker"
+	"github.com/nilesh/docktail/internal/kube"
 	"github.com/nilesh/docktail/internal/theme"
 	"github.com/nilesh/docktail/internal/ui"
 	"github.com/spf13/cobra"
@@ -15,13 +17,15 @@ import (
 var (
 	version = "0.1.0"
 
-	project    string
-	containers []string
-	since      string
-	timestamps bool
-	wrap       bool
-	noColor    bool
-	themeFlag  string
+	project     string
+	containers  []string
+	since       string
+	timestamps  bool
+	wrap        bool
+	noColor     bool
+	themeFlag   string
+	kubeContext string
+	namespace   string
 )
 
 var rootCmd = &cobra.Command{
@@ -33,12 +37,14 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.Flags().StringVarP(&project, "project", "p", "", "Docker Compose project name (default: auto-detect)")
-	rootCmd.Flags().StringSliceVarP(&containers, "containers", "c", nil, "Specific containers to monitor (default: all)")
+	rootCmd.Flags().StringSliceVarP(&containers, "containers", "c", nil, "Specific containers/pods to monitor (default: all)")
 	rootCmd.Flags().StringVarP(&since, "since", "s", "", "Show logs since timestamp (e.g., '1h', '2024-01-01')")
 	rootCmd.Flags().BoolVarP(&timestamps, "timestamps", "t", true, "Show timestamps")
 	rootCmd.Flags().BoolVarP(&wrap, "wrap", "w", false, "Wrap long lines")
 	rootCmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colors")
 	rootCmd.Flags().StringVar(&themeFlag, "theme", "auto", "Color theme: dark, light, auto (default: auto)")
+	rootCmd.Flags().StringVar(&kubeContext, "kube-context", "", "Kubernetes context name (enables K8s mode)")
+	rootCmd.Flags().StringVarP(&namespace, "namespace", "n", "", "Kubernetes namespace (default: from kubeconfig)")
 	rootCmd.Version = version
 }
 
@@ -47,40 +53,58 @@ func Execute() error {
 }
 
 func run(cmd *cobra.Command, args []string) error {
-	client, err := docker.NewClient()
-	if err != nil {
-		return fmt.Errorf("failed to connect to Docker: %w", err)
-	}
-	defer client.Close()
-
 	theme.SetTheme(themeFlag)
 
-	projectName := project
-	if projectName == "" {
-		// Try auto-detect from compose file in current directory
-		projectName, err = docker.DetectProject()
-		if err != nil {
-			// No compose file found — show project picker
-			projectName, err = pickProject(client)
+	var be backend.Backend
+	var scope string
+	var err error
+
+	if kubeContext != "" || namespace != "" {
+		// Kubernetes mode — uses current context from kubeconfig if --kube-context not set
+		k, kubeErr := kube.NewClient(kubeContext, namespace)
+		if kubeErr != nil {
+			return fmt.Errorf("failed to connect to Kubernetes: %w", kubeErr)
+		}
+		be = k
+		scope = k.Namespace()
+	} else {
+		// Docker mode
+		client, dockerErr := docker.NewClient()
+		if dockerErr != nil {
+			return fmt.Errorf("failed to connect to Docker: %w", dockerErr)
+		}
+		be = client
+
+		scope = project
+		if scope == "" {
+			scope, err = docker.DetectProject()
 			if err != nil {
-				return err
+				scope, err = pickProject(client)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
+	defer be.Close()
 
-	containerList, err := client.ListContainers(projectName, containers)
+	containerList, err := be.ListWorkloads(cmd.Context(), scope, containers)
 	if err != nil {
-		return fmt.Errorf("failed to list containers: %w", err)
+		return fmt.Errorf("failed to list workloads: %w", err)
 	}
 
 	if len(containerList) == 0 {
-		return fmt.Errorf("no containers found for project %q", projectName)
+		label := "containers"
+		if kubeContext != "" {
+			label = "pods"
+		}
+		return fmt.Errorf("no %s found for %q", label, scope)
 	}
 
 	opts := app.Options{
-		Project:    projectName,
+		Project:    scope,
 		Containers: containerList,
-		Client:     client,
+		Backend:    be,
 		Timestamps: timestamps,
 		Wrap:       wrap,
 		Since:      since,

@@ -18,9 +18,9 @@ type LogMessage struct {
 	Err   error
 }
 
-// StreamLogs starts streaming logs for a container and sends them to the returned channel.
+// streamLogs starts streaming logs for a container and sends them to the returned channel.
 // It runs until the context is cancelled.
-func (c *Client) StreamLogs(ctx context.Context, container *model.Container, since string) <-chan LogMessage {
+func (c *Client) streamLogs(ctx context.Context, container *model.Container, since string) <-chan LogMessage {
 	ch := make(chan LogMessage, 64)
 
 	go func() {

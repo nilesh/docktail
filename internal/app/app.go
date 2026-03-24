@@ -12,7 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/nilesh/docktail/internal/docker"
+	"github.com/nilesh/docktail/internal/backend"
 	"github.com/nilesh/docktail/internal/model"
 	"github.com/nilesh/docktail/internal/theme"
 	"github.com/nilesh/docktail/internal/ui"
@@ -39,7 +39,7 @@ const (
 type Options struct {
 	Project    string
 	Containers []*model.Container
-	Client     *docker.Client
+	Backend    backend.Backend
 	Timestamps bool
 	Wrap       bool
 	Since      string
@@ -80,10 +80,11 @@ type Model struct {
 	resizing       bool
 	lastClickTime  time.Time
 	lastClickLineY int
+	dragStartLine  int // log line where mouse drag began (-1 = no drag)
 
-	// Docker client
-	client     *docker.Client
-	logCh      chan docker.LogMessage
+	// Backend
+	backend    backend.Backend
+	logCh      chan backend.LogMessage
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
 	streams    map[string]*containerStream
@@ -106,14 +107,15 @@ func New(opts Options) Model {
 	}
 
 	m := Model{
-		opts:       opts,
-		keys:       DefaultKeyMap(),
-		focus:      FocusLogs,
-		client:     opts.Client,
+		opts:          opts,
+		keys:          DefaultKeyMap(),
+		focus:         FocusLogs,
+		dragStartLine: -1,
+		backend:       opts.Backend,
 		baseCtx:    ctx,
 		baseCancel: cancel,
 		streams:    make(map[string]*containerStream),
-		logCh:      make(chan docker.LogMessage, 256),
+		logCh:      make(chan backend.LogMessage, 256),
 		sidebar: ui.SidebarModel{
 			Containers: opts.Containers,
 			Width:      sidebarWidth,
@@ -195,8 +197,8 @@ func (m *Model) startStreamForContainer(c *model.Container) {
 	ctx, cancel := context.WithCancel(m.baseCtx)
 	m.streams[c.ID] = &containerStream{cancel: cancel}
 
-	ch := m.client.StreamLogs(ctx, c, m.opts.Since)
-	go func(ch <-chan docker.LogMessage) {
+	ch := m.backend.StreamLogs(ctx, c, m.opts.Since)
+	go func(ch <-chan backend.LogMessage) {
 		for msg := range ch {
 			m.logCh <- msg
 		}
@@ -610,7 +612,7 @@ func (m *Model) updateDimensions() {
 
 func (m *Model) createExecSession(c *model.Container) tea.Cmd {
 	return func() tea.Msg {
-		session, err := m.client.CreateExec(context.Background(), c.ID)
+		session, err := m.backend.CreateExec(context.Background(), c.ID)
 		if err != nil {
 			return ExecConnectedMsg{Err: err}
 		}
@@ -620,30 +622,31 @@ func (m *Model) createExecSession(c *model.Container) tea.Cmd {
 
 func (m *Model) executeContainerAction(c *model.Container, action string) tea.Cmd {
 	return func() tea.Msg {
+		ctx := context.Background()
 		var err error
 		switch action {
 		case "stop":
-			err = m.client.StopContainer(c.ID)
+			err = m.backend.StopWorkload(ctx, c.ID)
 			if err == nil {
 				c.Status = model.StatusStopped
 			}
 		case "start":
-			err = m.client.StartContainer(c.ID)
+			err = m.backend.StartWorkload(ctx, c.ID)
 			if err == nil {
 				c.Status = model.StatusRunning
 			}
 		case "restart":
-			err = m.client.RestartContainer(c.ID)
+			err = m.backend.RestartWorkload(ctx, c.ID)
 			if err == nil {
 				c.Status = model.StatusRunning
 			}
 		case "pause":
-			err = m.client.PauseContainer(c.ID)
+			err = m.backend.PauseWorkload(ctx, c.ID)
 			if err == nil {
 				c.Status = model.StatusPaused
 			}
 		case "unpause":
-			err = m.client.UnpauseContainer(c.ID)
+			err = m.backend.UnpauseWorkload(ctx, c.ID)
 			if err == nil {
 				c.Status = model.StatusRunning
 			}
@@ -682,64 +685,99 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Button {
 	case tea.MouseButtonLeft:
-		if msg.Action != tea.MouseActionRelease {
-			return m, nil
-		}
 		x, y := msg.X, msg.Y
 
-		if y < titleBarHeight || y >= m.height-statusBarHeight {
+		switch msg.Action {
+		case tea.MouseActionPress:
+			// Start drag tracking if in log area
+			if y >= titleBarHeight && y < m.height-statusBarHeight {
+				contentY := y - titleBarHeight
+				if (m.sidebarHidden || x >= sidebarWidth) && !m.isInShellArea(y) {
+					logLineIdx := m.logView.VisibleStartIndex() + contentY
+					m.dragStartLine = logLineIdx
+				}
+			}
 			return m, nil
-		}
 
-		contentY := y - titleBarHeight
-
-		// Sidebar click
-		if !m.sidebarHidden && x < sidebarWidth {
-			m.focus = FocusSidebar
-			m.sidebar.Focused = true
-			m.shell.Focused = false
-			m.sidebar.HandleClick(contentY)
-			m.refilter()
+		case tea.MouseActionMotion:
+			// Drag selection in log area
+			if m.dragStartLine >= 0 && y >= titleBarHeight && y < m.height-statusBarHeight {
+				contentY := y - titleBarHeight
+				logLineIdx := m.logView.VisibleStartIndex() + contentY
+				m.logView.ClickLine(m.dragStartLine) // set anchor
+				m.logView.ShiftClickLine(logLineIdx)  // extend selection
+			}
 			return m, nil
-		}
 
-		// Shell area click
-		if m.shell.IsOpen() {
-			logAreaHeight := m.logView.Height
-			shellStart := titleBarHeight + logAreaHeight + 1 + shellTabHeight
-			if y >= shellStart && y < m.height-statusBarHeight {
+		case tea.MouseActionRelease:
+			// Check if this was a drag (start != release line)
+			wasDrag := false
+			if m.dragStartLine >= 0 && y >= titleBarHeight && y < m.height-statusBarHeight {
+				contentY := y - titleBarHeight
+				logLineIdx := m.logView.VisibleStartIndex() + contentY
+				if logLineIdx != m.dragStartLine {
+					wasDrag = true
+					m.logView.ShiftClickLine(logLineIdx)
+				}
+			}
+			m.dragStartLine = -1
+
+			if wasDrag {
+				return m, nil
+			}
+
+			// Regular click handling (no drag)
+			if y < titleBarHeight || y >= m.height-statusBarHeight {
+				return m, nil
+			}
+
+			contentY := y - titleBarHeight
+
+			// Sidebar click
+			if !m.sidebarHidden && x < sidebarWidth {
+				m.focus = FocusSidebar
+				m.sidebar.Focused = true
+				m.shell.Focused = false
+				m.sidebar.HandleClick(contentY)
+				m.refilter()
+				return m, nil
+			}
+
+			// Shell area click
+			if m.isInShellArea(y) {
 				m.focus = FocusShell
 				m.shell.Focused = true
 				m.sidebar.Focused = false
 				return m, nil
 			}
-		}
 
-		// Log area click
-		m.focus = FocusLogs
-		m.sidebar.Focused = false
-		m.shell.Focused = false
+			// Log area click
+			m.focus = FocusLogs
+			m.sidebar.Focused = false
+			m.shell.Focused = false
 
-		logLineIdx := m.logView.VisibleStartIndex() + contentY
+			logLineIdx := m.logView.VisibleStartIndex() + contentY
 
-		switch {
-		case msg.Shift:
-			m.logView.ShiftClickLine(logLineIdx)
-		case msg.Ctrl:
-			m.logView.CtrlClickLine(logLineIdx)
-		default:
-			// Double-click detection
-			now := time.Now()
-			if now.Sub(m.lastClickTime) <= doubleClickThreshold && m.lastClickLineY == y {
-				text := m.logView.CopyLine(logLineIdx)
-				if text != "" {
-					m.lastClickTime = time.Time{}
-					return m, func() tea.Msg { return ui.CopiedMsg{Text: text} }
+			switch {
+			case msg.Shift:
+				m.logView.ShiftClickLine(logLineIdx)
+			case msg.Ctrl:
+				m.logView.CtrlClickLine(logLineIdx)
+			default:
+				// Double-click detection
+				now := time.Now()
+				if now.Sub(m.lastClickTime) <= doubleClickThreshold && m.lastClickLineY == y {
+					text := m.logView.CopyLine(logLineIdx)
+					if text != "" {
+						m.lastClickTime = time.Time{}
+						return m, func() tea.Msg { return ui.CopiedMsg{Text: text} }
+					}
 				}
+				m.lastClickTime = now
+				m.lastClickLineY = y
+				m.logView.ClickLine(logLineIdx)
 			}
-			m.lastClickTime = now
-			m.lastClickLineY = y
-			m.logView.ClickLine(logLineIdx)
+			return m, nil
 		}
 		return m, nil
 
@@ -769,13 +807,31 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseButtonNone:
-		if msg.Action == tea.MouseActionMotion && m.resizing {
-			return m.handleResizeDrag(msg), nil
+		if msg.Action == tea.MouseActionMotion {
+			if m.resizing {
+				return m.handleResizeDrag(msg), nil
+			}
+			// Drag selection (some terminals report motion under MouseButtonNone)
+			if m.dragStartLine >= 0 && msg.Y >= titleBarHeight && msg.Y < m.height-statusBarHeight {
+				contentY := msg.Y - titleBarHeight
+				logLineIdx := m.logView.VisibleStartIndex() + contentY
+				m.logView.ClickLine(m.dragStartLine)
+				m.logView.ShiftClickLine(logLineIdx)
+			}
 		}
 		return m, nil
 	}
 
 	return m, nil
+}
+
+// isInShellArea returns true if the Y coordinate falls within the shell panel.
+func (m *Model) isInShellArea(y int) bool {
+	if !m.shell.IsOpen() {
+		return false
+	}
+	shellStart := titleBarHeight + m.logView.Height + 1 + shellTabHeight
+	return y >= shellStart && y < m.height-statusBarHeight
 }
 
 func (m Model) handleResizeDrag(msg tea.MouseMsg) Model {

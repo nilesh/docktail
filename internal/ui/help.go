@@ -67,6 +67,15 @@ func (m HelpModel) View(width, height int) string {
 			{"Enter", "Execute"},
 			{"Esc", "Back to logs"},
 		}},
+		{"Mouse", [][2]string{
+			{"Click", "Freeze & move cursor"},
+			{"Drag", "Select line range"},
+			{"Shift+click", "Range select"},
+			{"Ctrl+click", "Toggle select"},
+			{"Double-click", "Copy line"},
+			{"Scroll", "Scroll logs"},
+			{"Right-click", "Container actions"},
+		}},
 	}
 
 	var content string
