@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -12,6 +13,7 @@ import (
 	"github.com/nilesh/docktail/internal/theme"
 	"github.com/nilesh/docktail/internal/ui"
 	"github.com/spf13/cobra"
+	"k8s.io/klog/v2"
 )
 
 var (
@@ -36,6 +38,9 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
+	// Suppress klog output from client-go to prevent it from corrupting the TUI
+	klog.SetOutput(io.Discard)
+
 	rootCmd.Flags().StringVarP(&project, "project", "p", "", "Docker Compose project name (default: auto-detect)")
 	rootCmd.Flags().StringSliceVarP(&containers, "containers", "c", nil, "Specific containers/pods to monitor (default: all)")
 	rootCmd.Flags().StringVarP(&since, "since", "s", "", "Show logs since timestamp (e.g., '1h', '2024-01-01')")
